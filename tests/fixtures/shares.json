@@ -1,0 +1,65 @@
+[
+  {
+    "zone": "Alpha",
+    "group": "alpha",
+    "storage": "primary",
+    "linux_path": "/labs/alpha/alphalab",
+    "mac_path": "/Volumes/alphalab",
+    "windows_path": "\\\\fileserver.example.org\\alphalab",
+    "mac_smb_url": "smb://fileserver.example.org/alphalab"
+  },
+  {
+    "zone": "Alpha",
+    "group": "alpha",
+    "storage": "home",
+    "linux_path": "/labs/alpha/home",
+    "mac_path": "/Volumes/alpha$",
+    "windows_path": "\\\\fileserver.example.org\\alpha$",
+    "mac_smb_url": "smb://fileserver.example.org/alpha$"
+  },
+  {
+    "zone": "Bravo",
+    "group": "bravo",
+    "storage": "primary",
+    "linux_path": "/labs/bravo/bravolab",
+    "mac_path": "/Volumes/bravolab",
+    "windows_path": "\\\\fileserver.example.org\\bravolab",
+    "mac_smb_url": "smb://fileserver.example.org/bravolab"
+  },
+  {
+    "zone": "Bravo",
+    "group": "bravo",
+    "storage": "home",
+    "linux_path": "/labs/bravo/home",
+    "mac_path": "/Volumes/bravo$",
+    "windows_path": "\\\\fileserver.example.org\\bravo$",
+    "mac_smb_url": "smb://fileserver.example.org/bravo$"
+  },
+  {
+    "zone": "Charlie",
+    "group": "charlie",
+    "storage": "primary",
+    "linux_path": "/labs/charlie/charlie",
+    "mac_path": "/Volumes/charlie",
+    "windows_path": "\\\\fileserver.example.org\\charlie",
+    "mac_smb_url": "smb://fileserver.example.org/charlie"
+  },
+  {
+    "zone": "Delta",
+    "group": "delta",
+    "storage": "scratch",
+    "linux_path": "/scratch/delta",
+    "mac_path": "/Volumes/delta_scratch",
+    "windows_path": "\\\\scratch.example.org\\delta",
+    "mac_smb_url": "smb://scratch.example.org/delta"
+  },
+  {
+    "zone": "Echo",
+    "group": "echo",
+    "storage": "nearline",
+    "linux_path": "/archive/echo",
+    "mac_path": "/Volumes/echo_archive",
+    "windows_path": "\\\\archive.example.org\\echo",
+    "mac_smb_url": "smb://archive.example.org/echo"
+  }
+]

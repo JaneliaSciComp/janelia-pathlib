@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+*.egg
+.ruff_cache/
+.mypy_cache/
+uv.lock
+
+# Share data is fetched at runtime into the user cache dir — never commit it.
+src/janelia_pathlib/shares.json
+

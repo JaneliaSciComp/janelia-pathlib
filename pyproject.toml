@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "janelia-pathlib"
+version = "0.1.0"
+description = "Auto-translating pathlib.Path for Janelia file shares"
+requires-python = ">=3.12"
+dependencies = [
+    "platformdirs>=4.0",
+]
+
+[project.scripts]
+janelia-paths-fetch = "janelia_pathlib._fetch:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/janelia_pathlib"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
