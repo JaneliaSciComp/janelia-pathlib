@@ -37,9 +37,7 @@ def test_translate_linux_to_windows():
 
 
 def test_translate_mac_to_linux():
-    assert (
-        translate("/Volumes/alphalab/data", "linux") == "/labs/alpha/alphalab/data"
-    )
+    assert translate("/Volumes/alphalab/data", "linux") == "/labs/alpha/alphalab/data"
 
 
 def test_translate_windows_to_linux():
@@ -339,3 +337,78 @@ def test_translate_windows_forward_slash():
         translate("//fileserver.example.org/alphalab/data", "linux")
         == "/labs/alpha/alphalab/data"
     )
+
+
+# --- Offline / fetch robustness ---
+
+
+def test_fetch_shares_uses_timeout(monkeypatch, tmp_path):
+    """fetch_shares passes a timeout to urlopen so it can't hang indefinitely."""
+    from janelia_pathlib import _fetch
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"paths": []}'
+
+    def fake_urlopen(url, *args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return _Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _fetch.fetch_shares(tmp_path / "shares.json")
+    assert captured["timeout"] is not None
+    assert captured["timeout"] > 0
+
+
+def test_fetch_timeout_env_override(monkeypatch):
+    from janelia_pathlib import _fetch
+
+    monkeypatch.setenv("JANELIA_PATHLIB_FETCH_TIMEOUT", "3.5")
+    assert _fetch.fetch_timeout() == 3.5
+    monkeypatch.setenv("JANELIA_PATHLIB_FETCH_TIMEOUT", "not-a-number")
+    assert _fetch.fetch_timeout() == _fetch._DEFAULT_TIMEOUT
+
+
+def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
+    """With JANELIA_PATHLIB_NO_FETCH set and no cache, load returns no shares and
+    paths pass through untranslated instead of raising."""
+    from janelia_pathlib import _registry, translate
+
+    monkeypatch.setenv("JANELIA_PATHLIB_NO_FETCH", "1")
+    monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
+    _registry._load_shares.cache_clear()
+    try:
+        assert _registry._load_shares() == []
+        # No known shares -> a real share path is left untranslated
+        assert translate("/labs/alpha/alphalab/data", "mac") is None
+    finally:
+        _registry._load_shares.cache_clear()
+
+
+def test_missing_cache_raises_without_no_fetch(monkeypatch, tmp_path):
+    """Without the opt-out, a missing cache + failed fetch still raises (unchanged)."""
+    from urllib.error import URLError
+
+    from janelia_pathlib import _registry
+
+    monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
+    monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
+
+    def boom(*args, **kwargs):
+        raise URLError("offline")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    _registry._load_shares.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="auto-fetch failed"):
+            _registry._load_shares()
+    finally:
+        _registry._load_shares.cache_clear()

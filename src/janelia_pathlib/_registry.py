@@ -11,7 +11,7 @@ from functools import cache
 from typing import TYPE_CHECKING
 from urllib.error import URLError
 
-from janelia_pathlib._fetch import default_cache_path, fetch_shares
+from janelia_pathlib._fetch import default_cache_path, fetch_shares, no_fetch
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -48,13 +48,19 @@ def _load_shares() -> list[Share]:
     """Load share data from the user cache, fetching it if missing."""
     data_path = default_cache_path()
     if not data_path.exists():
+        if no_fetch():
+            # Offline/CI opt-out (JANELIA_PATHLIB_NO_FETCH): skip the network fetch
+            # and degrade to no known shares, so paths pass through untranslated
+            # instead of raising.
+            return []
         try:
             fetch_shares(data_path)
         except (URLError, OSError) as e:
             raise RuntimeError(
                 f"No share data at {data_path} and auto-fetch failed: {e}. "
                 "Run `janelia-paths-fetch` from a machine with access to "
-                "the Janelia network to populate the cache."
+                "the Janelia network to populate the cache, or set "
+                "JANELIA_PATHLIB_NO_FETCH=1 to run offline without translation."
             ) from e
     data_text = data_path.read_text()
     raw = json.loads(data_text)
