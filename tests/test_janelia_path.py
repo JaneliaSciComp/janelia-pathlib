@@ -2,16 +2,27 @@
 
 Tests run against a fictional share fixture (see tests/fixtures/shares.json
 and tests/conftest.py). No real Janelia share data is referenced here.
+
+Tests that exercise JaneliaPath (a pathlib.Path subclass) are restricted to
+the OS whose path separators they expect, since pathlib always uses the
+native separator regardless of mocking.
 """
 
+import sys
 from unittest.mock import patch
 
 import pytest
 
 from janelia_pathlib import JaneliaPath, Share, get_path, get_share, resolve, translate
 
+mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="macOS paths")
+linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux paths")
+unix_only = pytest.mark.skipif(sys.platform == "win32", reason="Unix paths")
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows paths")
+
 
 # --- translate() tests ---
+# These are pure string functions and run on every OS.
 
 
 def test_translate_linux_to_mac():
@@ -97,49 +108,48 @@ def test_resolve_longest_prefix_wins():
 # --- JaneliaPath constructor tests ---
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_janeliapath_translates_on_mac(mock_sys):
+@mac_only
+def test_janeliapath_translates_on_mac():
     p = JaneliaPath("/labs/charlie/charlie/data/file.txt")
     assert str(p) == "/Volumes/charlie/data/file.txt"
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Linux")
-def test_janeliapath_translates_on_linux(mock_sys):
+@linux_only
+def test_janeliapath_translates_on_linux():
     p = JaneliaPath("/Volumes/alphalab/data")
     assert str(p) == "/labs/alpha/alphalab/data"
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_janeliapath_no_match_passthrough(mock_sys):
+@unix_only
+def test_janeliapath_no_match_passthrough():
     p = JaneliaPath("/tmp/local/file.txt")
     assert str(p) == "/tmp/local/file.txt"
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_janeliapath_already_correct_os(mock_sys):
+@mac_only
+def test_janeliapath_already_correct_os():
     """A Mac path on Mac should pass through unchanged."""
     p = JaneliaPath("/Volumes/alphalab/data")
     assert str(p) == "/Volumes/alphalab/data"
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_janeliapath_is_path_subclass(mock_sys):
+def test_janeliapath_is_path_subclass():
     from pathlib import Path
 
-    p = JaneliaPath("/labs/alpha/alphalab")
+    p = JaneliaPath._from_raw("/labs/alpha/alphalab")
     assert isinstance(p, Path)
     assert isinstance(p, JaneliaPath)
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_janeliapath_join_with_slash(mock_sys):
+@mac_only
+def test_janeliapath_join_with_slash():
     p = JaneliaPath("/labs/bravo/bravolab") / "sub" / "data"
     assert str(p) == "/Volumes/bravolab/sub/data"
     assert isinstance(p, JaneliaPath)
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_janeliapath_incremental_join_translates(mock_sys):
+@mac_only
+def test_janeliapath_incremental_join_translates():
     """A partial prefix passes through, but joining to a full share triggers translation."""
     p = JaneliaPath("/labs/bravo")
     assert str(p) == "/labs/bravo"  # no match yet
@@ -151,6 +161,7 @@ def test_janeliapath_incremental_join_translates(mock_sys):
 # --- to_os() tests ---
 
 
+@unix_only
 def test_to_os_mac_to_linux():
     p = JaneliaPath._from_raw("/Volumes/alphalab/data")
     linux = p.to_os("linux")
@@ -158,12 +169,14 @@ def test_to_os_mac_to_linux():
     assert isinstance(linux, JaneliaPath)
 
 
+@unix_only
 def test_to_os_mac_to_windows():
     p = JaneliaPath._from_raw("/Volumes/alphalab/data")
     win = p.to_os("windows")
     assert str(win) == "\\\\fileserver.example.org\\alphalab\\data"
 
 
+@unix_only
 def test_to_os_no_match_returns_self():
     p = JaneliaPath._from_raw("/tmp/local/file.txt")
     result = p.to_os("linux")
@@ -173,8 +186,8 @@ def test_to_os_no_match_returns_self():
 # --- share property tests ---
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_share_property(mock_sys):
+@mac_only
+def test_share_property():
     p = JaneliaPath("/labs/alpha/alphalab/experiment")
     share = p.share
     assert isinstance(share, Share)
@@ -184,13 +197,14 @@ def test_share_property(mock_sys):
     assert share.mac_path == "/Volumes/alphalab"
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_share_property_no_match(mock_sys):
+@mac_only
+def test_share_property_no_match():
     p = JaneliaPath("/tmp/local/file.txt")
     assert p.share is None
 
 
 # --- get_share() and from_share() tests ---
+# get_share() returns a Share dataclass (no pathlib), runs everywhere.
 
 
 def test_get_share():
@@ -216,27 +230,27 @@ def test_get_share_not_found():
         get_share("nonexistent_group_xyz")
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_from_share_on_mac(mock_sys):
+@mac_only
+def test_from_share_on_mac():
     p = JaneliaPath.from_share("bravo")
     assert str(p) == "/Volumes/bravolab"
     assert isinstance(p, JaneliaPath)
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Linux")
-def test_from_share_on_linux(mock_sys):
+@linux_only
+def test_from_share_on_linux():
     p = JaneliaPath.from_share("bravo")
     assert str(p) == "/labs/bravo/bravolab"
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_from_share_home(mock_sys):
+@mac_only
+def test_from_share_home():
     p = JaneliaPath.from_share("bravo", "home")
     assert str(p) == "/Volumes/bravo$"
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_from_share_join_subpath(mock_sys):
+@mac_only
+def test_from_share_join_subpath():
     p = JaneliaPath.from_share("bravo") / "sub" / "data"
     assert str(p) == "/Volumes/bravolab/sub/data"
 
@@ -249,15 +263,15 @@ def test_from_share_not_found():
 # --- get_path() tests ---
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_get_path_on_mac(mock_sys):
+@mac_only
+def test_get_path_on_mac():
     p = get_path("bravo")
     assert str(p) == "/Volumes/bravolab"
     assert isinstance(p, JaneliaPath)
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_get_path_with_storage(mock_sys):
+@mac_only
+def test_get_path_with_storage():
     p = get_path("bravo", "home")
     assert str(p) == "/Volumes/bravo$"
     assert isinstance(p, JaneliaPath)
@@ -273,8 +287,8 @@ def test_get_path_not_found():
 
 @patch("janelia_pathlib._path.subprocess.run")
 @patch("janelia_pathlib._path.Path.exists", return_value=False)
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_mount_calls_open_with_smb_url(mock_sys, mock_exists, mock_run):
+@mac_only
+def test_mount_calls_open_with_smb_url(mock_exists, mock_run):
     """mount() should call 'open smb://...' when share is not mounted."""
     # After subprocess.run, simulate the mount appearing
     mock_exists.side_effect = [False, False, True]
@@ -288,23 +302,23 @@ def test_mount_calls_open_with_smb_url(mock_sys, mock_exists, mock_run):
 
 
 @patch("janelia_pathlib._path.Path.exists", return_value=True)
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_mount_already_mounted(mock_sys, mock_exists):
+@mac_only
+def test_mount_already_mounted(mock_exists):
     """mount() should return True immediately if already mounted."""
     p = JaneliaPath("/labs/alpha/alphalab/data")
     result = p.mount()
     assert result is True
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Linux")
-def test_mount_raises_on_linux(mock_sys):
+@linux_only
+def test_mount_raises_on_linux():
     p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
     with pytest.raises(RuntimeError, match="only supported on macOS"):
         p.mount()
 
 
-@patch("janelia_pathlib._registry.platform.system", return_value="Darwin")
-def test_mount_raises_for_unknown_path(mock_sys):
+@mac_only
+def test_mount_raises_for_unknown_path():
     p = JaneliaPath("/tmp/not/a/share")
     with pytest.raises(RuntimeError, match="No known share"):
         p.mount()
