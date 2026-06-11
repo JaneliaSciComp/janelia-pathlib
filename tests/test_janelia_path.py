@@ -10,10 +10,11 @@ native separator regardless of mocking.
 
 import sys
 from unittest.mock import patch
+from urllib.error import URLError
 
 import pytest
 
-from janelia_pathlib import JaneliaPath, Share, get_path, get_share, resolve, translate
+from janelia_pathlib import JaneliaPath, Share, _fetch, _registry, get_path, get_share, resolve, translate
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="macOS paths")
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux paths")
@@ -344,7 +345,6 @@ def test_translate_windows_forward_slash():
 
 def test_fetch_shares_uses_timeout(monkeypatch, tmp_path):
     """fetch_shares passes a timeout to urlopen so it can't hang indefinitely."""
-    from janelia_pathlib import _fetch
 
     captured = {}
 
@@ -369,7 +369,6 @@ def test_fetch_shares_uses_timeout(monkeypatch, tmp_path):
 
 
 def test_fetch_timeout_env_override(monkeypatch):
-    from janelia_pathlib import _fetch
 
     monkeypatch.setenv("JANELIA_PATHLIB_FETCH_TIMEOUT", "3.5")
     assert _fetch.fetch_timeout() == 3.5
@@ -380,7 +379,6 @@ def test_fetch_timeout_env_override(monkeypatch):
 def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
     """With JANELIA_PATHLIB_NO_FETCH set and no cache, load returns no shares and
     paths pass through untranslated instead of raising."""
-    from janelia_pathlib import _registry, translate
 
     monkeypatch.setenv("JANELIA_PATHLIB_NO_FETCH", "1")
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
@@ -395,10 +393,6 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
 
 def test_missing_cache_raises_without_no_fetch(monkeypatch, tmp_path):
     """Without the opt-out, a missing cache + failed fetch still raises (unchanged)."""
-    from urllib.error import URLError
-
-    from janelia_pathlib import _registry
-
     monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
 
