@@ -7,7 +7,7 @@ Janelia file shares are mounted at different paths on Linux, Mac, and Windows. T
 ## Installation
 
 ```bash
-uv add janelia-pathlib
+uv add "janelia-pathlib @ git+https://github.com/JaneliaSciComp/janelia-pathlib"
 ```
 
 Requires Python 3.12+. Zero external dependencies.
