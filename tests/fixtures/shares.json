@@ -38,6 +38,15 @@
   {
     "zone": "Charlie",
     "group": "charlie",
+    "storage": "home",
+    "linux_path": "/labs/charlie",
+    "mac_path": "/Volumes/charlie$",
+    "windows_path": "\\\\fileserver.example.org\\charlie$",
+    "mac_smb_url": "smb://fileserver.example.org/charlie$"
+  },
+  {
+    "zone": "Charlie",
+    "group": "charlie",
     "storage": "primary",
     "linux_path": "/labs/charlie/charlie",
     "mac_path": "/Volumes/charlie",

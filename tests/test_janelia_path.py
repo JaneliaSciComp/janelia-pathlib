@@ -98,11 +98,13 @@ def test_resolve_exact_share_root():
 
 
 def test_resolve_longest_prefix_wins():
-    """If both /labs/alpha and /labs/alpha/alphalab match, the longer wins."""
-    result = resolve("/labs/alpha/alphalab/file.txt")
+    """Both /labs/charlie and /labs/charlie/charlie match; the longer wins."""
+    result = resolve("/labs/charlie/charlie/data")
     assert result is not None
-    share, _ = result
-    assert share.linux_path == "/labs/alpha/alphalab"
+    share, subpath = result
+    assert share.linux_path == "/labs/charlie/charlie"
+    assert share.storage == "primary"
+    assert subpath == "data"
 
 
 # --- JaneliaPath constructor tests ---
@@ -169,14 +171,12 @@ def test_to_os_mac_to_linux():
     assert isinstance(linux, JaneliaPath)
 
 
-@unix_only
 def test_to_os_mac_to_windows():
     p = JaneliaPath._from_raw("/Volumes/alphalab/data")
     win = p.to_os("windows")
     assert str(win) == "\\\\fileserver.example.org\\alphalab\\data"
 
 
-@unix_only
 def test_to_os_no_match_returns_self():
     p = JaneliaPath._from_raw("/tmp/local/file.txt")
     result = p.to_os("linux")
@@ -301,13 +301,15 @@ def test_mount_calls_open_with_smb_url(mock_exists, mock_run):
     assert args[1].startswith("smb://")
 
 
+@patch("janelia_pathlib._path.subprocess.run")
 @patch("janelia_pathlib._path.Path.exists", return_value=True)
 @mac_only
-def test_mount_already_mounted(mock_exists):
+def test_mount_already_mounted(mock_exists, mock_run):
     """mount() should return True immediately if already mounted."""
     p = JaneliaPath("/labs/alpha/alphalab/data")
     result = p.mount()
     assert result is True
+    mock_run.assert_not_called()
 
 
 @linux_only
