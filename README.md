@@ -259,3 +259,24 @@ To point at a custom shares file (useful for testing or air-gapped setups), set:
 ```bash
 export JANELIA_PATHLIB_SHARES_PATH=/path/to/shares.json
 ```
+
+### Running offline (CI)
+
+The auto-fetch needs the Janelia network, and by default a missing cache with no
+network raises `RuntimeError`. For environments that can't reach the network
+(e.g. CI on cloud runners), disable the fetch:
+
+```bash
+export JANELIA_PATHLIB_NO_FETCH=1
+```
+
+With this set and no cached share data, the registry loads no shares and paths
+**pass through untranslated** instead of raising — so code that constructs
+`JaneliaPath` keeps working (non-share paths behave exactly like `pathlib.Path`).
+
+The fetch also has a timeout (default 10s) so an unreachable network can't hang
+the first import; override it with:
+
+```bash
+export JANELIA_PATHLIB_FETCH_TIMEOUT=5
+```
