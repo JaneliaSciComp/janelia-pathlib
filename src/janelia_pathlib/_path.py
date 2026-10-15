@@ -174,61 +174,53 @@ class JaneliaPath(Path):
 
         return _ensure_mounted(share_info, timeout=timeout)
 
-    def as_uri(self) -> str:
-        """Return this path as a URI.
 
-        If this path matches a known Janelia share, returns its unambiguous
-        ``janelia://host/share/subpath`` identity -- the share's SMB host
-        and name are never ambiguous, even when two shares collide on the
-        same mount name on macOS (the share's static ``mac_path`` guess
-        would not be safe to use here). Otherwise falls back to the
-        standard ``file://`` URI.
-        """
-        result = resolve(str(self))
-        if result is None:
-            return super().as_uri()
-        share_info, subpath = result
-        url = janelia_url(share_info)
-        if url is None:
-            return super().as_uri()
-        if not subpath:
-            return url
-        return url + "/" + subpath
+def from_janelia_uri(path_str: str, *, timeout: float = 30) -> str:
+    """Translate a ``janelia://`` URI to a real, usable local path string.
 
-    @classmethod
-    def from_uri(cls, uri: str, *, timeout: float = 30) -> JaneliaPath:
-        """Construct a JaneliaPath from a URI.
+    A plain path is returned unchanged. A
+    ``janelia://host/share/subpath`` string is resolved to the matching
+    Janelia share and, on macOS, mounted on demand if not already mounted --
+    returning its real local mountpoint rather than a guessed
+    ``/Volumes/<share>`` path, which may not exist or may belong to a
+    different, colliding share.
+    """
+    if not path_str.strip().startswith("janelia://"):
+        return path_str
 
-        For ``janelia://host/share/subpath`` URIs, resolves to the matching
-        Janelia share and, on macOS, mounts it on demand if not already
-        mounted -- returning its real local mountpoint rather than a
-        guessed ``/Volumes/<share>`` path, which may not exist or may
-        belong to a different, colliding share. Any other URI is handled
-        as a standard ``file://`` path.
-        """
-        if not uri.strip().startswith("janelia://"):
-            if not hasattr(Path, "from_uri"):
-                raise NotImplementedError(
-                    "Path.from_uri() requires Python 3.13+; "
-                    "use a 'janelia://' URL or construct from a plain path instead."
-                )
-            return cls._from_raw(str(Path.from_uri(uri)))
+    result = resolve_janelia_url(path_str)
+    if result is None:
+        raise RuntimeError(f"No known share for URL: {path_str}")
+    share_info, subpath = result
 
-        result = resolve_janelia_url(uri)
-        if result is None:
-            raise RuntimeError(f"No known share for URL: {uri}")
-        share_info, subpath = result
+    if current_os() == "mac":
+        mount_point = _ensure_mounted(share_info, timeout=timeout)
+        if mount_point is None:
+            raise RuntimeError(f"Failed to mount share: {share_info.name}")
+        base = str(mount_point)
+    else:
+        base = getattr(share_info, f"{current_os()}_path")
 
-        if current_os() == "mac":
-            mount_point = _ensure_mounted(share_info, timeout=timeout)
-            if mount_point is None:
-                raise RuntimeError(f"Failed to mount share: {share_info.name}")
-            base = str(mount_point)
-        else:
-            base = getattr(share_info, f"{current_os()}_path")
+    return base if not subpath else base + "/" + subpath
 
-        path_str = base if not subpath else base + "/" + subpath
-        return cls._from_raw(path_str)
+
+def to_janelia_uri(path: str | Path) -> str:
+    """Translate a path to its canonical ``janelia://`` URI form.
+
+    If the path matches a known Janelia share, returns its unambiguous
+    ``janelia://host/share/subpath`` identity -- safe to round-trip through
+    ``from_janelia_uri`` on any OS, unlike a share's static ``mac_path``
+    guess, which can collide with another share's on macOS. Otherwise
+    returns the plain path string unchanged.
+    """
+    result = resolve(str(path))
+    if result is None:
+        return str(path)
+    share_info, subpath = result
+    url = janelia_url(share_info)
+    if url is None:
+        return str(path)
+    return url if not subpath else url + "/" + subpath
 
 
 def get_path(group: str, storage: str = "primary") -> JaneliaPath:
