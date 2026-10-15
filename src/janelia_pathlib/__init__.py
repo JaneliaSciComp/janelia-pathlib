@@ -1,17 +1,8 @@
-"""janelia-pathlib: auto-translating pathlib.Path for Janelia file shares."""
+"""janelia-pathlib: translate Janelia file share paths to/from an unambiguous URI."""
 
-from janelia_pathlib._path import JaneliaPath, from_janelia_uri, get_path, to_janelia_uri
-from janelia_pathlib._registry import Share, Storage, current_os, get_share, resolve, translate
+from janelia_pathlib._path import from_janelia_uri, to_janelia_uri
 
 __all__ = [
-    "JaneliaPath",
-    "Share",
-    "Storage",
-    "current_os",
     "from_janelia_uri",
-    "get_path",
-    "get_share",
-    "resolve",
     "to_janelia_uri",
-    "translate",
 ]

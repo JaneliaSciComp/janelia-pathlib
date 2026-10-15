@@ -70,5 +70,23 @@
     "mac_path": "/Volumes/echo_archive",
     "windows_path": "\\\\archive.example.org\\echo",
     "mac_smb_url": "smb://archive.example.org/echo"
+  },
+  {
+    "zone": "Foxtrot",
+    "group": "foxtrot",
+    "storage": "scratch",
+    "linux_path": "/nrs/foxtrot",
+    "mac_path": "/Volumes/foxtrot",
+    "windows_path": "\\\\nrs.example.org\\foxtrot",
+    "mac_smb_url": "smb://nrs.example.org/foxtrot"
+  },
+  {
+    "zone": "Foxtrot",
+    "group": "foxtrot",
+    "storage": "archive",
+    "linux_path": "/nearline/foxtrot",
+    "mac_path": "/Volumes/foxtrot",
+    "windows_path": "\\\\nearline.example.org\\foxtrot",
+    "mac_smb_url": "smb://nearline.example.org/foxtrot"
   }
 ]
