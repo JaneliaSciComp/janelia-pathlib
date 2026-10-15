@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import re
+import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
 _OS_MAP = {"Darwin": "mac", "Linux": "linux", "Windows": "windows"}
 _PATH_KEYS = ("linux_path", "mac_path", "windows_path")
+_SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 
 
 class Storage(StrEnum):
@@ -41,6 +43,59 @@ class Share:
     mac_path: str
     windows_path: str
     mac_smb_url: str = ""
+
+
+def smb_url_parts(smb_url: str) -> tuple[str, str] | None:
+    """Split an ``smb://host/share`` URL into ``(host, share_name)``."""
+    match = re.match(r"smb://([^/]+)/(.+)", smb_url)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def janelia_url(share: Share) -> str | None:
+    """The unambiguous ``janelia://host/share_name`` identity for a share.
+
+    Unlike the share's static ``mac_path`` guess, (host, share_name) never
+    collides: two shares can both want ``/Volumes/shroff`` on macOS, but
+    their SMB host+share coordinates are always distinct.
+    """
+    parts = smb_url_parts(share.mac_smb_url)
+    if parts is None:
+        return None
+    return f"janelia://{parts[0]}/{parts[1]}"
+
+
+def _live_smb_mounts() -> list[tuple[str, str, str]]:
+    """List live SMB mounts as ``(host, share_name, mountpoint)`` from `mount` output."""
+    try:
+        output = subprocess.run(
+            ["mount"], capture_output=True, text=True, check=True
+        ).stdout
+    except (subprocess.CalledProcessError, OSError):
+        return []
+
+    mounts = []
+    for line in output.splitlines():
+        match = _SMB_MOUNT_LINE.match(line)
+        if match:
+            mounts.append((match.group(1), match.group(2), match.group(3)))
+    return mounts
+
+
+def find_live_mount(host: str, share_name: str) -> str | None:
+    """Find the real local mountpoint for an SMB share via live `mount` output.
+
+    macOS assigns the mountpoint name (e.g. ``/Volumes/shroff``) based only on
+    the share name, so two shares with the same name on different servers
+    collide and the second gets suffixed (``/Volumes/shroff-1``). Matching on
+    ``(host, share_name)`` against the live mount table is the only reliable
+    way to find which one is actually ours.
+    """
+    for mount_host, mount_share, mountpoint in _live_smb_mounts():
+        if mount_host == host and mount_share == share_name:
+            return mountpoint
+    return None
 
 
 @cache
@@ -101,6 +156,47 @@ def _path_key(os_name: str) -> str:
     return f"{os_name}_path"
 
 
+def resolve_janelia_url(
+    path_str: str, shares: Sequence[Share] | None = None
+) -> tuple[Share, str] | None:
+    """Match a ``janelia://host/share_name/subpath`` string against known shares.
+
+    Unlike a bare ``/Volumes/<name>`` path, the host in this identity makes
+    resolution unambiguous even when two shares have colliding mac_path
+    guesses (e.g. ``nrs.hhmi.org/shroff`` vs ``nearline.hhmi.org/shroff``
+    both nominally want ``/Volumes/shroff``).
+    """
+    if shares is None:
+        shares = _load_shares()
+
+    match = re.match(r"janelia://([^/]+)/(.+)", path_str)
+    if match is None:
+        return None
+    host, rest = match.group(1), match.group(2).rstrip("/")
+
+    best_share: Share | None = None
+    best_share_name = ""
+
+    for share in shares:
+        share_parts = smb_url_parts(share.mac_smb_url)
+        if share_parts is None or share_parts[0] != host:
+            continue
+        share_name = share_parts[1]
+        if rest != share_name and not rest.startswith(share_name + "/"):
+            continue
+        if len(share_name) > len(best_share_name):
+            best_share = share
+            best_share_name = share_name
+
+    if best_share is None:
+        return None
+
+    subpath = rest[len(best_share_name) :]
+    if subpath.startswith("/"):
+        subpath = subpath[1:]
+    return best_share, subpath
+
+
 def resolve(
     path_str: str, shares: Sequence[Share] | None = None
 ) -> tuple[Share, str] | None:
@@ -108,9 +204,21 @@ def resolve(
 
     Returns (share, subpath) where subpath is the relative portion after
     the share mount prefix, or None if no share matches.
+
+    Accepts Linux, Mac, and Windows paths, as well as ``janelia://`` URLs. A
+    bare ``/Volumes/<name>`` Mac path is inherently ambiguous when two
+    shares collide on the same mount name (macOS names mountpoints after
+    the share name alone, ignoring the host) -- in that case this returns
+    whichever share happens to match first, same as a plain string guess.
+    Use the unambiguous ``janelia://host/share`` form (see
+    ``resolve_janelia_url``) or a canonical Linux path to always resolve
+    correctly.
     """
     if shares is None:
         shares = _load_shares()
+
+    if path_str.strip().startswith("janelia://"):
+        return resolve_janelia_url(path_str, shares)
 
     normalized = _to_forward_slash(path_str.strip())
     # Strip trailing slash for matching
@@ -188,6 +296,13 @@ def translate(path_str: str, target_os: str | None = None) -> str | None:
     base = getattr(share, _path_key(target_os))
     if not base:
         return None
+
+    if target_os == "mac":
+        parts = smb_url_parts(share.mac_smb_url)
+        if parts is not None:
+            live_base = find_live_mount(*parts)
+            if live_base is not None:
+                base = live_base
 
     if not subpath:
         return base

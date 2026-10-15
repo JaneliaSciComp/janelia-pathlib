@@ -8,7 +8,9 @@ the OS whose path separators they expect, since pathlib always uses the
 native separator regardless of mocking.
 """
 
+import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
 
@@ -284,31 +286,66 @@ def test_get_path_not_found():
 # --- mount() tests ---
 
 
-@patch("janelia_pathlib._path.subprocess.run")
-@patch("janelia_pathlib._path.Path.exists", return_value=False)
-@mac_only
-def test_mount_calls_open_with_smb_url(mock_exists, mock_run):
-    """mount() should call 'open smb://...' when share is not mounted."""
-    # After subprocess.run, simulate the mount appearing
-    mock_exists.side_effect = [False, False, True]
-    p = JaneliaPath("/labs/alpha/alphalab/data")
-    result = p.mount(timeout=2)
-    assert result is True
-    mock_run.assert_called_once()
-    args = mock_run.call_args[0][0]
-    assert args[0] == "open"
-    assert args[1].startswith("smb://")
+def _mount_output(*entries: tuple[str, str, str]) -> subprocess.CompletedProcess:
+    """Build a fake `mount` stdout with the given (host, share, mountpoint) smbfs entries."""
+    lines = [
+        f"//malinmayorc@{host}/{share} on {mountpoint} (smbfs, nodev, nosuid)"
+        for host, share, mountpoint in entries
+    ]
+    return subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="\n".join(lines))
 
 
-@patch("janelia_pathlib._path.subprocess.run")
-@patch("janelia_pathlib._path.Path.exists", return_value=True)
 @mac_only
-def test_mount_already_mounted(mock_exists, mock_run):
-    """mount() should return True immediately if already mounted."""
-    p = JaneliaPath("/labs/alpha/alphalab/data")
-    result = p.mount()
-    assert result is True
-    mock_run.assert_not_called()
+def test_mount_calls_open_with_smb_url():
+    """mount() should call 'open smb://...' when share is not mounted, then resolve
+    the real mountpoint from live `mount` output (not the guessed mac_path).
+
+    _path.py and _registry.py both do `import subprocess` and call
+    `subprocess.run`, so they share the same module-level `run` attribute --
+    one patch covers both call sites, there's no such thing as patching them
+    independently.
+    """
+    p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
+    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            _mount_output(),  # not mounted yet
+            None,  # the `open` call
+            _mount_output(("fileserver.example.org", "alphalab", "/Volumes/alphalab")),
+        ]
+        result = p.mount(timeout=2)
+        assert result == Path("/Volumes/alphalab")
+        open_call = mock_run.call_args_list[1]
+        args = open_call[0][0]
+        assert args[0] == "open"
+        assert args[1].startswith("smb://")
+
+
+@mac_only
+def test_mount_already_mounted():
+    """mount() should return the existing mountpoint immediately without calling open."""
+    p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
+    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+        mock_run.return_value = _mount_output(
+            ("fileserver.example.org", "alphalab", "/Volumes/alphalab")
+        )
+        result = p.mount()
+        assert result == Path("/Volumes/alphalab")
+        for call in mock_run.call_args_list:
+            assert call[0][0][0] != "open"
+
+
+@mac_only
+def test_mount_resolves_colliding_share_name():
+    """When two shares share a mount-name (e.g. nrs/nearline collisions), mount()
+    must match on (host, share_name), not on the guessed /Volumes/<name> path."""
+    p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
+    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+        mock_run.return_value = _mount_output(
+            ("fileserver.example.org", "alphalab", "/Volumes/alphalab"),
+            ("otherserver.example.org", "alphalab", "/Volumes/alphalab-1"),
+        )
+        result = p.mount()
+        assert result == Path("/Volumes/alphalab")
 
 
 @linux_only

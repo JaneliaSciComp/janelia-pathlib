@@ -6,7 +6,56 @@ import subprocess
 import time
 from pathlib import Path
 
-from janelia_pathlib._registry import Share, current_os, get_share, resolve, translate
+from janelia_pathlib._registry import (
+    Share,
+    current_os,
+    find_live_mount,
+    get_share,
+    janelia_url,
+    resolve,
+    resolve_janelia_url,
+    smb_url_parts,
+    translate,
+)
+
+
+def _ensure_mounted(share_info: Share, *, timeout: float = 30) -> Path | None:
+    """Mount ``share_info`` on macOS if needed and return its real local mountpoint.
+
+    Resolution is keyed on ``(host, share_name)`` from the share's SMB URL,
+    not on the share's static ``mac_path`` guess, because macOS names
+    mountpoints after the share name alone: two shares with the same name on
+    different servers collide, and the second mounted gets suffixed
+    (``/Volumes/<share>-1``).
+    """
+    smb_url = share_info.mac_smb_url
+    if not smb_url:
+        raise RuntimeError(f"No SMB URL available for share: {share_info.name}")
+
+    parts = smb_url_parts(smb_url)
+    if parts is None:
+        raise RuntimeError(f"Malformed SMB URL for share: {share_info.name}")
+    host, share_name = parts
+
+    existing = find_live_mount(host, share_name)
+    if existing is not None:
+        return Path(existing)
+
+    if current_os() != "mac":
+        raise RuntimeError("Automatic mounting is only supported on macOS")
+
+    subprocess.run(["open", smb_url], check=True)
+
+    # Wait for the mount to appear
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found = find_live_mount(host, share_name)
+        if found is not None:
+            return Path(found)
+        time.sleep(0.5)
+
+    found = find_live_mount(host, share_name)
+    return Path(found) if found is not None else None
 
 
 class JaneliaPath(Path):
@@ -97,18 +146,24 @@ class JaneliaPath(Path):
             return None
         return result[0]
 
-    def mount(self, *, timeout: float = 30) -> bool:
+    def mount(self, *, timeout: float = 30) -> Path | None:
         """Mount the file share for this path (macOS only).
 
-        Uses the SMB URL to trigger macOS's native mount. This is a no-op
-        if the share is already mounted or if not running on macOS.
+        Uses the SMB URL to trigger macOS's native mount, then looks up the
+        real local mountpoint from live ``mount`` output. This is necessary
+        because macOS names mountpoints after the share name alone
+        (``/Volumes/<share>``): two shares with the same name on different
+        servers collide, and the second mounted gets suffixed
+        (``/Volumes/<share>-1``). ``share_info.mac_path`` is only a guess and
+        may not be where the share actually ends up.
 
         Args:
             timeout: Seconds to wait for the mount to appear. Defaults to 30.
 
         Returns:
-            True if the share mount point exists after the operation,
-            False otherwise.
+            The real local mountpoint Path if the share is mounted (whether
+            already mounted or freshly mounted by this call), or None if
+            mounting did not succeed within the timeout.
 
         Raises:
             RuntimeError: If not on macOS or the share has no SMB URL.
@@ -117,27 +172,63 @@ class JaneliaPath(Path):
         if share_info is None:
             raise RuntimeError(f"No known share for path: {self}")
 
-        mount_point = Path(share_info.mac_path)
-        if mount_point.exists():
-            return True
+        return _ensure_mounted(share_info, timeout=timeout)
 
-        if current_os() != "mac":
-            raise RuntimeError("Automatic mounting is only supported on macOS")
+    def as_uri(self) -> str:
+        """Return this path as a URI.
 
-        smb_url = share_info.mac_smb_url
-        if not smb_url:
-            raise RuntimeError(f"No SMB URL available for share: {share_info.name}")
+        If this path matches a known Janelia share, returns its unambiguous
+        ``janelia://host/share/subpath`` identity -- the share's SMB host
+        and name are never ambiguous, even when two shares collide on the
+        same mount name on macOS (the share's static ``mac_path`` guess
+        would not be safe to use here). Otherwise falls back to the
+        standard ``file://`` URI.
+        """
+        result = resolve(str(self))
+        if result is None:
+            return super().as_uri()
+        share_info, subpath = result
+        url = janelia_url(share_info)
+        if url is None:
+            return super().as_uri()
+        if not subpath:
+            return url
+        return url + "/" + subpath
 
-        subprocess.run(["open", smb_url], check=True)
+    @classmethod
+    def from_uri(cls, uri: str, *, timeout: float = 30) -> JaneliaPath:
+        """Construct a JaneliaPath from a URI.
 
-        # Wait for the mount to appear
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if mount_point.exists():
-                return True
-            time.sleep(0.5)
+        For ``janelia://host/share/subpath`` URIs, resolves to the matching
+        Janelia share and, on macOS, mounts it on demand if not already
+        mounted -- returning its real local mountpoint rather than a
+        guessed ``/Volumes/<share>`` path, which may not exist or may
+        belong to a different, colliding share. Any other URI is handled
+        as a standard ``file://`` path.
+        """
+        if not uri.strip().startswith("janelia://"):
+            if not hasattr(Path, "from_uri"):
+                raise NotImplementedError(
+                    "Path.from_uri() requires Python 3.13+; "
+                    "use a 'janelia://' URL or construct from a plain path instead."
+                )
+            return cls._from_raw(str(Path.from_uri(uri)))
 
-        return mount_point.exists()
+        result = resolve_janelia_url(uri)
+        if result is None:
+            raise RuntimeError(f"No known share for URL: {uri}")
+        share_info, subpath = result
+
+        if current_os() == "mac":
+            mount_point = _ensure_mounted(share_info, timeout=timeout)
+            if mount_point is None:
+                raise RuntimeError(f"Failed to mount share: {share_info.name}")
+            base = str(mount_point)
+        else:
+            base = getattr(share_info, f"{current_os()}_path")
+
+        path_str = base if not subpath else base + "/" + subpath
+        return cls._from_raw(path_str)
 
 
 def get_path(group: str, storage: str = "primary") -> JaneliaPath:
