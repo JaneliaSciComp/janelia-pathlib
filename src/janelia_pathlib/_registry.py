@@ -12,7 +12,7 @@ from functools import cache
 from typing import TYPE_CHECKING
 from urllib.error import URLError
 
-from janelia_pathlib._fetch import default_cache_path, fetch_shares, no_fetch
+from ._fetch import fetch_shares, no_fetch, resolve_cache_path
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -25,6 +25,7 @@ _SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 class Share:
     """A single file share entry, matching the Fileglancer API's own field names.
 
+    ``zone`` is a nicely formatted name for the
     ``mac_path`` is an ``smb://host/share`` URL, not a local path, since macOS's
     actual local mountpoint can only be resolved live (see
     ``find_share_for_mac_mountpoint``), never guessed ahead of time.
@@ -249,24 +250,39 @@ def find_share_for_mounted_path(
 
 @cache
 def _load_shares() -> list[Share]:
-    """Load share data from the user cache, fetching it if missing."""
-    data_path = default_cache_path()
-    if not data_path.exists():
-        if no_fetch():
-            # Offline/CI opt-out (JANELIA_PATHLIB_NO_FETCH): skip the network fetch
-            # and degrade to no known shares, so paths pass through untranslated
-            # instead of raising.
-            return []
+    """Load share data, refreshing it from the network on every call unless
+    JANELIA_PATHLIB_NO_FETCH is set.
+
+    JANELIA_PATHLIB_NO_FETCH means "never touch the network": use the cache
+    file as-is if present (however stale). Without it, a fetch failure
+    (offline, DNS, etc.) falls back to the existing cache file instead.
+    Either way, if there's no cache file to fall back to, this degrades to
+    no known shares (with a warning) rather than raising -- paths just pass
+    through untranslated instead of breaking the caller.
+    """
+    cache_file = resolve_cache_path()
+
+    if not no_fetch():
         try:
-            fetch_shares(data_path)
+            fetch_shares(cache_file)
         except (URLError, OSError) as e:
-            raise RuntimeError(
-                f"No share data at {data_path} and auto-fetch failed: {e}. "
-                "Run `janelia-paths-fetch` from a machine with access to "
-                "the Janelia network to populate the cache, or set "
-                "JANELIA_PATHLIB_NO_FETCH=1 to run offline without translation."
-            ) from e
-    data_text = data_path.read_text()
+            if cache_file.is_file():
+                warnings.warn(
+                    f"Failed to refresh share data ({e}); using cached data "
+                    f"at {cache_file}, which may be stale.",
+                    stacklevel=2,
+                )
+
+    if not cache_file.is_file():
+        warnings.warn(
+            f"No share data available at {cache_file}; paths will not be "
+            "translated. Run `janelia-paths-fetch` from a machine with "
+            "access to the Janelia network to populate the cache.",
+            stacklevel=2,
+        )
+        return []
+
+    data_text = cache_file.read_text()
     raw = json.loads(data_text)
     shares = []
     for entry in raw:

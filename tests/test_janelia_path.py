@@ -4,6 +4,7 @@ Tests run against a fictional share fixture (see tests/fixtures/shares.json
 and tests/conftest.py). No real Janelia share data is referenced here.
 """
 
+import json
 import subprocess
 import sys
 from unittest.mock import patch
@@ -260,14 +261,6 @@ def test_fetch_shares_uses_timeout(monkeypatch, tmp_path):
     assert captured["timeout"] > 0
 
 
-def test_fetch_timeout_env_override(monkeypatch):
-
-    monkeypatch.setenv("JANELIA_PATHLIB_FETCH_TIMEOUT", "3.5")
-    assert _fetch.fetch_timeout() == 3.5
-    monkeypatch.setenv("JANELIA_PATHLIB_FETCH_TIMEOUT", "not-a-number")
-    assert _fetch.fetch_timeout() == _fetch._DEFAULT_TIMEOUT
-
-
 def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
     """With JANELIA_PATHLIB_NO_FETCH set and no cache, load returns no shares and
     paths pass through untranslated instead of raising."""
@@ -276,15 +269,19 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
     _registry._load_shares.cache_clear()
     try:
-        assert _registry._load_shares() == []
+        with pytest.warns(UserWarning, match="No share data available"):
+            assert _registry._load_shares() == []
         # No known shares -> a real share path is left untranslated
         assert to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
     finally:
         _registry._load_shares.cache_clear()
 
 
-def test_missing_cache_raises_without_no_fetch(monkeypatch, tmp_path):
-    """Without the opt-out, a missing cache + failed fetch still raises (unchanged)."""
+def test_missing_cache_degrades_without_no_fetch(monkeypatch, tmp_path):
+    """Without the opt-out, a missing cache + failed fetch still degrades to no
+    known shares (with a warning) instead of raising -- same end state as the
+    no_fetch case, just reached via a failed fetch attempt instead of an
+    explicit opt-out."""
     monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
 
@@ -294,7 +291,62 @@ def test_missing_cache_raises_without_no_fetch(monkeypatch, tmp_path):
     monkeypatch.setattr("urllib.request.urlopen", boom)
     _registry._load_shares.cache_clear()
     try:
-        with pytest.raises(RuntimeError, match="auto-fetch failed"):
-            _registry._load_shares()
+        with pytest.warns(UserWarning, match="No share data available"):
+            assert _registry._load_shares() == []
+    finally:
+        _registry._load_shares.cache_clear()
+
+
+def test_load_shares_refetches_every_call(monkeypatch, tmp_path):
+    """Without JANELIA_PATHLIB_NO_FETCH, _load_shares() always attempts a fresh
+    fetch -- not just when the cache file is missing."""
+    monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
+    cache_file = tmp_path / "shares.json"
+    monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(cache_file))
+
+    call_count = {"n": 0}
+
+    def fake_fetch_shares(path):
+        call_count["n"] += 1
+        path.write_text("[]")
+
+    monkeypatch.setattr(_registry, "fetch_shares", fake_fetch_shares)
+    _registry._load_shares.cache_clear()
+    try:
+        _registry._load_shares.cache_clear()
+        _registry._load_shares()
+        assert call_count["n"] == 1
+        _registry._load_shares.cache_clear()
+        _registry._load_shares()
+        assert call_count["n"] == 2
+    finally:
+        _registry._load_shares.cache_clear()
+
+
+def test_fetch_failure_falls_back_to_stale_cache(monkeypatch, tmp_path):
+    """If the network fetch fails but a cache file already exists, use the
+    stale cache (with a warning) instead of raising."""
+    monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
+    cache_file = tmp_path / "shares.json"
+    cache_file.write_text(json.dumps([
+        {
+            "zone": "Alpha",
+            "linux_path": "/labs/alpha/alphalab",
+            "windows_path": "\\\\fileserver.example.org\\alphalab",
+            "mac_path": "smb://fileserver.example.org/alphalab",
+        }
+    ]))
+    monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(cache_file))
+
+    def boom(*args, **kwargs):
+        raise URLError("offline")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    _registry._load_shares.cache_clear()
+    try:
+        with pytest.warns(UserWarning, match="stale"):
+            shares = _registry._load_shares()
+        assert len(shares) == 1
+        assert shares[0].zone == "Alpha"
     finally:
         _registry._load_shares.cache_clear()

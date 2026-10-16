@@ -94,15 +94,18 @@ Both functions round-trip: `from_janelia_uri(to_janelia_uri(p))` resolves back t
 
 ## Share data
 
-Share data is **not** bundled with the package — it's fetched at runtime from the [Fileglancer API](https://fileglancer.int.janelia.org/api/file-share-paths) into your user cache directory:
+Share data is **not** bundled with the package — it's fetched from the [Fileglancer API](https://fileglancer.int.janelia.org/api/file-share-paths) and cached in your user cache directory:
 
 - **macOS**: `~/Library/Caches/janelia-pathlib/shares.json`
 - **Linux**: `~/.cache/janelia-pathlib/shares.json`
 - **Windows**: `%LOCALAPPDATA%\janelia-pathlib\Cache\shares.json`
 
-The first time you import `janelia_pathlib` on a machine without a cached file, it auto-fetches from the API. This requires access to the Janelia network.
+**Every time** `to_janelia_uri`/`from_janelia_uri` first needs share data in a process, the library tries to refresh this cache from the API (once per process — subsequent calls in the same process reuse that result, so a long-running process won't pick up newly added shares until restarted). This requires access to the Janelia network, but a failed refresh never breaks translation outright:
 
-To refresh the cache (e.g. after new shares are added upstream):
+- If the refresh fails but a cache file already exists, the **existing (possibly stale) cache is used instead**, with a `UserWarning`.
+- If the refresh fails and there's **no cache file at all**, share data degrades to "no known shares" (also with a warning) — paths just pass through untranslated rather than raising.
+
+To force a refresh manually (e.g. to pick up a newly added share before your next run):
 
 ```bash
 janelia-paths-fetch
@@ -116,20 +119,16 @@ export JANELIA_PATHLIB_SHARES_PATH=/path/to/shares.json
 
 ### Running offline (CI)
 
-The auto-fetch needs the Janelia network, and by default a missing cache with no
-network raises `RuntimeError`. For environments that can't reach the network
-(e.g. CI on cloud runners), disable the fetch:
+For environments that can't reach the network at all (e.g. CI on cloud runners), disable fetching entirely:
 
 ```bash
 export JANELIA_PATHLIB_NO_FETCH=1
 ```
 
-With this set and no cached share data, the registry loads no shares and paths
-**pass through untranslated** instead of raising — so `to_janelia_uri`/`from_janelia_uri`
-keep working on non-share paths exactly as if no shares were known.
+With this set, the network is never touched: the existing cache file is used as-is if present (however stale), or share data degrades to "no known shares" if not — same `to_janelia_uri`/`from_janelia_uri` behavior as a failed fetch, just without ever attempting the network call. This is also what this project's own test suite uses, pointed at a small fixture file via `JANELIA_PATHLIB_SHARES_PATH`, so tests never depend on (or accidentally overwrite) real network data.
 
 The fetch also has a timeout (default 10s) so an unreachable network can't hang
-the first import; override it with:
+for long; override it with:
 
 ```bash
 export JANELIA_PATHLIB_FETCH_TIMEOUT=5
