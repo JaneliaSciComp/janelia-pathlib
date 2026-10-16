@@ -31,12 +31,21 @@ def test_to_janelia_uri_from_linux_path():
 
 @mac_only
 def test_to_janelia_uri_from_mac_path():
-    assert (
-        to_janelia_uri("/Volumes/alphalab/data")
-        == "janelia://fileserver.example.org/alphalab/data"
-    )
+    """Resolving a Mac path requires live mount state (mac_path alone could
+    be ambiguous), so this must be live-checked, not a static guess."""
+    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["mount"],
+            returncode=0,
+            stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
+        )
+        assert (
+            to_janelia_uri("/Volumes/alphalab/data")
+            == "janelia://fileserver.example.org/alphalab/data"
+        )
 
 
+@windows_only
 def test_to_janelia_uri_from_windows_path():
     assert (
         to_janelia_uri("\\\\fileserver.example.org\\alphalab\\data")
@@ -70,6 +79,7 @@ def test_to_janelia_uri_trailing_slash():
     )
 
 
+@windows_only
 def test_to_janelia_uri_windows_forward_slash():
     """Windows paths with forward slashes should still match."""
     assert (
@@ -102,17 +112,16 @@ def test_to_janelia_uri_resolves_colliding_mac_mount_via_live_state():
 
 
 @mac_only
-def test_to_janelia_uri_mac_mount_not_live_falls_back_to_static():
+def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
     """If live `mount` output has nothing at this mountpoint (e.g. not actually
-    mounted, or `mount` unavailable), fall back to the static mac_path guess."""
+    mounted, or `mount` unavailable), the path is left unresolved rather than
+    guessed from the static mac_path field -- a guess here could be wrong in
+    exactly the same way the original mount-name collision bug was."""
     with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"], returncode=0, stdout=""
         )
-        assert (
-            to_janelia_uri("/Volumes/alphalab/data")
-            == "janelia://fileserver.example.org/alphalab/data"
-        )
+        assert to_janelia_uri("/Volumes/alphalab/data") == "/Volumes/alphalab/data"
 
 
 # --- from_janelia_uri() tests ---

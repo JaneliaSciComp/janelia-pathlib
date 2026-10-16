@@ -7,10 +7,16 @@ Janelia file shares are mounted at different paths on Linux, Mac, and Windows, a
 ## Installation
 
 ```bash
+uv add janelia-pathlib
+```
+
+Or, to track the latest unreleased commit:
+
+```bash
 uv add "janelia-pathlib @ git+https://github.com/JaneliaSciComp/janelia-pathlib"
 ```
 
-Requires Python 3.12+. Zero external dependencies.
+Requires Python 3.12+. Zero runtime dependencies beyond `platformdirs`.
 
 ## Quick start
 
@@ -36,17 +42,23 @@ A share's local mount point differs by OS, and on macOS it isn't even guaranteed
 
 ### `to_janelia_uri(path)`
 
-Translate a local path (Linux, Mac, or Windows form) to its canonical `janelia://host/share/subpath` form.
+Translate a local path in the **current OS's own format** to its canonical `janelia://host/share/subpath` form. A path in a different OS's format (e.g. a Windows UNC path passed in while running on Linux) is not recognized — only `janelia://` URIs are portable across OSes; a plain path is assumed to describe the machine it's running on.
 
 ```python
 from janelia_pathlib import to_janelia_uri
 
+# On Linux:
 to_janelia_uri("/labs/alpha/alphalab/data")
 # "janelia://fileserver.example.org/alphalab/data"
 
+# On Mac, once the share is mounted:
 to_janelia_uri("/Volumes/alphalab/data")
 # "janelia://fileserver.example.org/alphalab/data"
 ```
+
+**On macOS**, resolving a `/Volumes/...` path requires the share to be mounted already — `mac_path` alone can't be trusted as a guess (two shares can collide on the same mount name; see "Why `janelia://`?" above), so this checks live `mount` state rather than guessing. If the share isn't mounted, the path isn't recognized and passes through unchanged. Use `from_janelia_uri` first if you need to mount it.
+
+**Linux** paths always resolve without any live check, since Linux mount points are fixed and never ambiguous.
 
 Paths that don't match any known share are returned unchanged:
 
@@ -122,3 +134,18 @@ the first import; override it with:
 ```bash
 export JANELIA_PATHLIB_FETCH_TIMEOUT=5
 ```
+
+## Releasing
+
+The package version is derived automatically from git tags (via `hatch-vcs`) —
+there's no version to bump in `pyproject.toml`. To cut a release, tag a commit
+on `main` and push the tag:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Pushing a `v*` tag runs the full test matrix in CI and, if it passes, builds
+and publishes the package to PyPI via
+[trusted publishing](https://docs.pypi.org/trusted-publishers/).

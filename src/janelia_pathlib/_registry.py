@@ -167,21 +167,51 @@ def find_share_for_windows_drive(
 _WINDOWS_DRIVE_RE = re.compile(r"^([A-Za-z]:)(\\.*)?$")
 
 
+def find_share_for_linux_mount(path_str: str, shares: Sequence[Share]) -> tuple[Share, str] | None:
+    """Find which of ``shares`` a Linux path falls under.
+
+    Linux mount points are fixed and admin-assigned, so (unlike macOS
+    mount-name collisions or Windows drive letters) a static ``linux_path``
+    prefix match is already fully authoritative -- no live state to check.
+    """
+    normalized = _to_forward_slash(path_str.strip())
+    normalized = re.sub(r"/+$", "", normalized)
+
+    best_share: Share | None = None
+    best_prefix = ""
+    for share in shares:
+        candidate = re.sub(r"/+$", "", share.linux_path or "")
+        if not candidate:
+            continue
+        if normalized.startswith(candidate) and len(candidate) > len(best_prefix):
+            rest = normalized[len(candidate) :]
+            if rest == "" or rest.startswith("/"):
+                best_share = share
+                best_prefix = candidate
+
+    if best_share is None:
+        return None
+    subpath = normalized[len(best_prefix) :]
+    return best_share, subpath[1:] if subpath.startswith("/") else subpath
+
+
 def find_share_for_mounted_path(
     path_str: str, os_name: str, shares: Sequence[Share]
 ) -> tuple[Share, str] | None:
-    """Detect whether ``path_str`` falls under a live-mounted Janelia share.
+    """Detect whether ``path_str`` falls under a mounted Janelia share.
 
-    Dispatches to the live, OS-specific check -- the only reliable way to
-    resolve a path whose mountpoint name doesn't uniquely determine the
-    share (macOS mount-name collisions, Windows drive-letter mappings).
-    Linux mounts are fixed and never ambiguous, so this always returns None
-    on Linux; callers fall back to static ``linux_path`` prefix matching.
+    Dispatches to the OS-specific check: a live mount-table/SMB-mapping
+    lookup on macOS and Windows (the only reliable way to resolve a path
+    whose mountpoint name doesn't uniquely determine the share -- macOS
+    mount-name collisions, Windows drive-letter mappings), or a plain
+    static ``linux_path`` prefix match on Linux (already fully
+    authoritative there, no live state needed).
 
-    Returns (share, subpath), or None if the live check doesn't apply or
-    finds nothing (not an error -- caller should fall back to static
-    prefix matching against linux_path/mac_path/windows_path).
+    Returns (share, subpath), or None if nothing matches.
     """
+    if os_name == "linux":
+        return find_share_for_linux_mount(path_str, shares)
+
     normalized = _to_forward_slash(path_str.strip())
     normalized = re.sub(r"/+$", "", normalized)
 
@@ -313,15 +343,21 @@ def resolve(
     Returns (share, subpath) where subpath is the relative portion after
     the share mount prefix, or None if no share matches.
 
-    On macOS and Windows, first checks live mount state
-    (``find_share_for_mounted_path``) to resolve ambiguous cases correctly:
-    a bare ``/Volumes/<name>`` Mac path can't be told apart from a static
-    string alone when two shares collide on the same mount name (macOS
-    names mountpoints after the share name alone, ignoring the host), and
-    a Windows drive letter isn't in the registry at all -- only live state
-    can map it to a share. Falls back to static
-    linux_path/mac_path/windows_path prefix matching if the live check
-    doesn't apply or finds nothing.
+    First checks whether the path falls under a mounted share for the
+    current OS (``find_share_for_mounted_path``) -- on macOS and Windows
+    this consults live mount state to resolve cases a static string alone
+    can't: a bare ``/Volumes/<name>`` Mac path can't be told apart from a
+    static string alone when two shares collide on the same mount name
+    (macOS names mountpoints after the share name alone, ignoring the
+    host), and a Windows drive letter isn't in the registry at all -- only
+    live state can map it to a share. On Linux this is just the static
+    ``linux_path`` match, already fully authoritative.
+
+    Falls back to a plain ``linux_path`` prefix match regardless of the
+    current OS, since it's a fixed, admin-assigned path that's never
+    ambiguous on any OS (unlike mac_path/windows_path, which would need
+    live state on an OS we aren't running to verify -- not something this
+    function guesses at).
     """
     if shares is None:
         shares = _load_shares()
@@ -330,34 +366,4 @@ def resolve(
     if live_result is not None:
         return live_result
 
-    normalized = _to_forward_slash(path_str.strip())
-    # Strip trailing slash for matching
-    normalized = re.sub(r"/+$", "", normalized)
-
-    best_share: Share | None = None
-    best_prefix = ""
-
-    for share in shares:
-        candidates = [share.linux_path, share.mac_path]
-        if share.windows_path:
-            candidates.append(_to_forward_slash(share.windows_path))
-
-        for candidate in candidates:
-            if not candidate:
-                continue
-            candidate_norm = re.sub(r"/+$", "", candidate)
-            if normalized.startswith(candidate_norm) and len(candidate_norm) > len(
-                best_prefix
-            ):
-                rest = normalized[len(candidate_norm) :]
-                if rest == "" or rest.startswith("/"):
-                    best_share = share
-                    best_prefix = candidate_norm
-
-    if best_share is None:
-        return None
-
-    subpath = normalized[len(best_prefix) :]
-    if subpath.startswith("/"):
-        subpath = subpath[1:]
-    return best_share, subpath
+    return find_share_for_linux_mount(path_str, shares)
