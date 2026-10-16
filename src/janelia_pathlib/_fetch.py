@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -57,29 +56,18 @@ def fetch_timeout() -> float:
         return _DEFAULT_TIMEOUT
 
 
-def _smb_to_volumes(smb_url: str) -> str:
-    match = re.match(r"smb://[^/]+/(.+)", smb_url)
-    if match:
-        return "/Volumes/" + match.group(1)
-    return smb_url
-
-
 def fetch_shares(target_path: Path) -> None:
-    """Fetch shares from the Fileglancer API and write them to target_path."""
+    """Fetch shares from the Fileglancer API and cache the response as-is.
+
+    Interpreting the fields (e.g. the API's ``mac_path`` is actually an
+    ``smb://`` URL, not a local path) is left to ``_registry._load_shares``,
+    so the cache file is a faithful, inspectable copy of what the API
+    returned.
+    """
     with urllib.request.urlopen(API_URL, timeout=fetch_timeout()) as resp:
         data = json.loads(resp.read())
 
     paths = data.get("paths", data)
-
-    for entry in paths:
-        for key in ("mount_path", "linux_path", "mac_path", "windows_path"):
-            val = entry.get(key)
-            if val:
-                entry[key] = re.sub(r"[/\\]+$", "", val)
-        mac = entry.get("mac_path")
-        if mac and mac.startswith("smb://"):
-            entry["mac_smb_url"] = mac
-            entry["mac_path"] = _smb_to_volumes(mac)
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(json.dumps(paths, indent=2) + "\n")

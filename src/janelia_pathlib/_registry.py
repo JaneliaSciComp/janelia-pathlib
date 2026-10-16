@@ -6,6 +6,7 @@ import json
 import platform
 import re
 import subprocess
+import warnings
 from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING
@@ -22,15 +23,20 @@ _SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 
 @dataclass(frozen=True, slots=True)
 class Share:
-    """A single file share entry with per-OS paths."""
+    """A single file share entry, matching the Fileglancer API's own field names.
 
-    name: str
-    group: str
-    storage: str
+    ``mac_path`` is an ``smb://host/share`` URL, not a local path, since macOS's
+    actual local mountpoint can only be resolved live (see
+    ``find_share_for_mac_mountpoint``), never guessed ahead of time.
+    ``linux_path`` and ``windows_path`` are real local paths: Linux mounts
+    are fixed (safe to match directly), and Windows UNC paths need no
+    live-mount check.
+    """
+
+    zone: str
     linux_path: str
-    mac_path: str
     windows_path: str
-    mac_smb_url: str = ""
+    mac_path: str
 
 
 def smb_url_parts(smb_url: str) -> tuple[str, str] | None:
@@ -44,11 +50,12 @@ def smb_url_parts(smb_url: str) -> tuple[str, str] | None:
 def janelia_url(share: Share) -> str | None:
     """The unambiguous ``janelia://host/share_name`` identity for a share.
 
-    Unlike the share's static ``mac_path`` guess, (host, share_name) never
-    collides: two shares can both want ``/Volumes/shroff`` on macOS, but
-    their SMB host+share coordinates are always distinct.
+    Unlike the mountpoint name macOS derives from the share name alone,
+    (host, share_name) never collides: two shares can both end up guessed
+    at the same ``/Volumes/<name>`` mountpoint on macOS, but their SMB
+    host+share coordinates are always distinct.
     """
-    parts = smb_url_parts(share.mac_smb_url)
+    parts = smb_url_parts(share.mac_path)
     if parts is None:
         return None
     return f"janelia://{parts[0]}/{parts[1]}"
@@ -74,11 +81,11 @@ def _live_smb_mounts() -> list[tuple[str, str, str]]:
 def find_live_mount(host: str, share_name: str) -> str | None:
     """Find the real local mountpoint for an SMB share via live `mount` output.
 
-    macOS assigns the mountpoint name (e.g. ``/Volumes/shroff``) based only on
-    the share name, so two shares with the same name on different servers
-    collide and the second gets suffixed (``/Volumes/shroff-1``). Matching on
-    ``(host, share_name)`` against the live mount table is the only reliable
-    way to find which one is actually ours.
+    macOS assigns the mountpoint name (e.g. ``/Volumes/<name>``) based only
+    on the share name, so two shares with the same name on different
+    servers collide and the second gets suffixed (``/Volumes/<name>-1``).
+    Matching on ``(host, share_name)`` against the live mount table is the
+    only reliable way to find which one is actually ours.
     """
     for mount_host, mount_share, mountpoint in _live_smb_mounts():
         if mount_host == host and mount_share == share_name:
@@ -91,17 +98,17 @@ def find_share_for_mac_mountpoint(
 ) -> Share | None:
     """Find which of ``shares`` is actually live-mounted at ``mountpoint``.
 
-    Disambiguates a bare ``/Volumes/<name>`` path when multiple shares have
-    the same static ``mac_path`` guess (e.g. nrs.hhmi.org/shroff and
-    nearline.hhmi.org/shroff both default to ``/Volumes/shroff``, with the
-    second one actually landing at ``/Volumes/shroff-1``) by checking which
+    Disambiguates a bare ``/Volumes/<name>`` path when multiple shares would
+    guess the same mountpoint name (e.g. two shares on different hosts that
+    happen to share a name both default to ``/Volumes/<name>``, with the
+    second one actually landing at ``/Volumes/<name>-1``) by checking which
     share's SMB host+name is actually mounted there right now.
     """
     for mount_host, mount_share, live_point in _live_smb_mounts():
         if live_point != mountpoint:
             continue
         for share in shares:
-            if smb_url_parts(share.mac_smb_url) == (mount_host, mount_share):
+            if smb_url_parts(share.mac_path) == (mount_host, mount_share):
                 return share
     return None
 
@@ -159,7 +166,7 @@ def find_share_for_windows_drive(
         if local.rstrip("\\").upper() != drive_norm:
             continue
         for share in shares:
-            if smb_url_parts(share.mac_smb_url) == (mount_host, mount_share):
+            if smb_url_parts(share.mac_path) == (mount_host, mount_share):
                 return share
     return None
 
@@ -263,20 +270,12 @@ def _load_shares() -> list[Share]:
     raw = json.loads(data_text)
     shares = []
     for entry in raw:
-        linux = entry.get("linux_path") or ""
-        mac = entry.get("mac_path") or ""
-        windows = entry.get("windows_path") or ""
-        if not (linux or mac or windows):
-            continue
         shares.append(
             Share(
-                name=entry.get("zone", ""),
-                group=entry.get("group", ""),
-                storage=entry.get("storage", ""),
-                linux_path=linux,
-                mac_path=mac,
-                windows_path=windows,
-                mac_smb_url=entry.get("mac_smb_url", ""),
+                zone=entry["zone"],
+                linux_path=entry["linux_path"],
+                windows_path=entry["windows_path"],
+                mac_path=entry["mac_path"],
             )
         )
     return shares
@@ -300,9 +299,9 @@ def resolve_janelia_url(
     """Match a ``janelia://host/share_name/subpath`` string against known shares.
 
     Unlike a bare ``/Volumes/<name>`` path, the host in this identity makes
-    resolution unambiguous even when two shares have colliding mac_path
-    guesses (e.g. ``nrs.hhmi.org/shroff`` vs ``nearline.hhmi.org/shroff``
-    both nominally want ``/Volumes/shroff``).
+    resolution unambiguous even when two shares' mountpoint-name guesses
+    collide (e.g. two different hosts whose share names happen to match
+    both nominally want the same ``/Volumes/<name>``).
     """
     if shares is None:
         shares = _load_shares()
@@ -316,7 +315,7 @@ def resolve_janelia_url(
     best_share_name = ""
 
     for share in shares:
-        share_parts = smb_url_parts(share.mac_smb_url)
+        share_parts = smb_url_parts(share.mac_path)
         if share_parts is None or share_parts[0] != host:
             continue
         share_name = share_parts[1]
@@ -355,9 +354,9 @@ def resolve(
 
     Falls back to a plain ``linux_path`` prefix match regardless of the
     current OS, since it's a fixed, admin-assigned path that's never
-    ambiguous on any OS (unlike mac_path/windows_path, which would need
-    live state on an OS we aren't running to verify -- not something this
-    function guesses at).
+    ambiguous on any OS -- unlike a mac mountpoint name or a windows drive
+    letter, which need live state on that OS to verify, and aren't guessed
+    at when running on a different one.
     """
     if shares is None:
         shares = _load_shares()

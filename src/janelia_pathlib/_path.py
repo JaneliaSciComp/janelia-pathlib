@@ -20,19 +20,19 @@ from janelia_pathlib._registry import (
 def _ensure_mounted(share_info: Share, *, timeout: float = 30) -> Path | None:
     """Mount ``share_info`` on macOS if needed and return its real local mountpoint.
 
-    Resolution is keyed on ``(host, share_name)`` from the share's SMB URL,
-    not on the share's static ``mac_path`` guess, because macOS names
-    mountpoints after the share name alone: two shares with the same name on
-    different servers collide, and the second mounted gets suffixed
-    (``/Volumes/<share>-1``).
+    Resolution is keyed on ``(host, share_name)`` from the share's ``mac_path``
+    SMB URL, not on any ``/Volumes/<share>`` mountpoint name guessed from it,
+    because macOS names mountpoints after the share name alone: two shares
+    with the same name on different servers collide, and the second mounted
+    gets suffixed (``/Volumes/<share>-1``).
     """
-    smb_url = share_info.mac_smb_url
+    smb_url = share_info.mac_path
     if not smb_url:
-        raise RuntimeError(f"No SMB URL available for share: {share_info.name}")
+        raise RuntimeError(f"No SMB URL available for share: {share_info.zone}")
 
     parts = smb_url_parts(smb_url)
     if parts is None:
-        raise RuntimeError(f"Malformed SMB URL for share: {share_info.name}")
+        raise RuntimeError(f"Malformed SMB URL for share: {share_info.zone}")
     host, share_name = parts
 
     existing = find_live_mount(host, share_name)
@@ -77,7 +77,7 @@ def from_janelia_uri(path_str: str, *, timeout: float = 30) -> str:
     if current_os() == "mac":
         mount_point = _ensure_mounted(share_info, timeout=timeout)
         if mount_point is None:
-            raise RuntimeError(f"Failed to mount share: {share_info.name}")
+            raise RuntimeError(f"Failed to mount share: {share_info.zone}")
         base = str(mount_point)
     else:
         base = getattr(share_info, f"{current_os()}_path")
@@ -90,8 +90,8 @@ def to_janelia_uri(path: str | Path) -> str:
 
     If the path matches a known Janelia share, returns its unambiguous
     ``janelia://host/share/subpath`` identity -- safe to round-trip through
-    ``from_janelia_uri`` on any OS, unlike a share's static ``mac_path``
-    guess, which can collide with another share's on macOS. Otherwise
+    ``from_janelia_uri`` on any OS, unlike a ``/Volumes/<share>`` mountpoint
+    name, which can collide with another share's on macOS. Otherwise
     returns the plain path string unchanged.
     """
     result = resolve(str(path))

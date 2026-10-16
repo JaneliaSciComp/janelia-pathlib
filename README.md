@@ -2,7 +2,7 @@
 
 Translate Janelia file share paths to and from an unambiguous `janelia://` URI, so code can refer to a share without depending on OS-specific mount guesses.
 
-Janelia file shares are mounted at different paths on Linux, Mac, and Windows, and on macOS two different shares can even collide on the same guessed mount point (e.g. `/Volumes/shroff`). This package gives you two functions to move between a local path and a stable, host-qualified identity that's never ambiguous.
+Janelia file shares are mounted at different paths on Linux, Mac, and Windows, and on macOS two different shares can even collide on the same guessed mount point (e.g. `/Volumes/<name>`). This package gives you two functions to move between a local path and a stable, host-qualified identity that's never ambiguous.
 
 ## Installation
 
@@ -34,7 +34,7 @@ path = from_janelia_uri(uri)
 
 ## Why `janelia://`?
 
-A share's local mount point differs by OS, and on macOS it isn't even guaranteed to be unique: two shares with the same share name on different servers (e.g. `nrs.hhmi.org/shroff` and `nearline.hhmi.org/shroff`) both nominally want `/Volumes/shroff` — macOS mounts the second at `/Volumes/shroff-1` instead. A bare path string like `/Volumes/shroff` can't tell you which share that actually is.
+A share's local mount point differs by OS, and on macOS it isn't even guaranteed to be unique: two shares with the same share name on different servers (e.g. `host-a.example.org/data` and `host-b.example.org/data`) both nominally want `/Volumes/data` — macOS mounts the second at `/Volumes/data-1` instead. A bare path string like `/Volumes/data` can't tell you which share that actually is.
 
 `janelia://host/share/subpath` encodes the SMB host and share name directly, which is always unique — so it's safe to store, log, or pass between machines, and always resolves back to the *correct* share regardless of what macOS happened to name the mountpoint.
 
