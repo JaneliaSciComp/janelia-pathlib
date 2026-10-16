@@ -175,12 +175,15 @@ def find_share_for_windows_drive(
 _WINDOWS_DRIVE_RE = re.compile(r"^([A-Za-z]:)(\\.*)?$")
 
 
-def find_share_for_linux_mount(path_str: str, shares: Sequence[Share]) -> tuple[Share, str] | None:
-    """Find which of ``shares`` a Linux path falls under.
+def _find_share_by_fixed_path(
+    path_str: str, shares: Sequence[Share], attr: str
+) -> tuple[Share, str] | None:
+    """Find which of ``shares`` a path falls under by prefix-matching ``attr``.
 
-    Linux mount points are fixed and admin-assigned, so (unlike macOS
-    mount-name collisions or Windows drive letters) a static ``linux_path``
-    prefix match is already fully authoritative -- no live state to check.
+    For path fields that are already unambiguous on their own (``linux_path``,
+    fixed and admin-assigned; ``windows_path``, a host-qualified UNC path) --
+    unlike a macOS mountpoint name or Windows drive letter, neither needs a
+    live-state check.
     """
     normalized = _to_forward_slash(path_str.strip())
     normalized = re.sub(r"/+$", "", normalized)
@@ -188,7 +191,7 @@ def find_share_for_linux_mount(path_str: str, shares: Sequence[Share]) -> tuple[
     best_share: Share | None = None
     best_prefix = ""
     for share in shares:
-        candidate = re.sub(r"/+$", "", share.linux_path or "")
+        candidate = _to_forward_slash(re.sub(r"[/\\]+$", "", getattr(share, attr) or ""))
         if not candidate:
             continue
         if normalized.startswith(candidate) and len(candidate) > len(best_prefix):
@@ -201,6 +204,25 @@ def find_share_for_linux_mount(path_str: str, shares: Sequence[Share]) -> tuple[
         return None
     subpath = normalized[len(best_prefix) :]
     return best_share, subpath[1:] if subpath.startswith("/") else subpath
+
+
+def find_share_for_linux_mount(path_str: str, shares: Sequence[Share]) -> tuple[Share, str] | None:
+    """Find which of ``shares`` a Linux path falls under.
+
+    Linux mount points are fixed and admin-assigned, so (unlike macOS
+    mount-name collisions or Windows drive letters) a static ``linux_path``
+    prefix match is already fully authoritative -- no live state to check.
+    """
+    return _find_share_by_fixed_path(path_str, shares, "linux_path")
+
+
+def find_share_for_windows_unc(path_str: str, shares: Sequence[Share]) -> tuple[Share, str] | None:
+    """Find which of ``shares`` a Windows UNC path (\\\\host\\share\\...) falls under.
+
+    A UNC path already encodes the host, so (unlike a drive letter) it's
+    unambiguous on its own -- no live-state check needed.
+    """
+    return _find_share_by_fixed_path(path_str, shares, "windows_path")
 
 
 def find_share_for_mounted_path(
@@ -236,14 +258,17 @@ def find_share_for_mounted_path(
 
     if os_name == "windows":
         match = _WINDOWS_DRIVE_RE.match(path_str.strip())
-        if match is None:
+        if match is not None:
+            drive, rest = match.group(1), match.group(2) or ""
+            share = find_share_for_windows_drive(drive, shares)
+            if share is not None:
+                subpath = _to_forward_slash(rest)
+                return share, subpath[1:] if subpath.startswith("/") else subpath
             return None
-        drive, rest = match.group(1), match.group(2) or ""
-        share = find_share_for_windows_drive(drive, shares)
-        if share is not None:
-            subpath = _to_forward_slash(rest)
-            return share, subpath[1:] if subpath.startswith("/") else subpath
-        return None
+
+        # Not a drive letter -- a UNC path (\\host\share\...) is already
+        # unambiguous, same as linux_path, so no live-state check is needed.
+        return find_share_for_windows_unc(path_str, shares)
 
     return None
 
