@@ -24,14 +24,6 @@ _SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 @dataclass(frozen=True, slots=True)
 class Share:
     """A single file share entry, matching the Fileglancer API's own field names.
-
-    ``zone`` is a nicely formatted name for the
-    ``mac_path`` is an ``smb://host/share`` URL, not a local path, since macOS's
-    actual local mountpoint can only be resolved live (see
-    ``find_share_for_mac_mountpoint``), never guessed ahead of time.
-    ``linux_path`` and ``windows_path`` are real local paths: Linux mounts
-    are fixed (safe to match directly), and Windows UNC paths need no
-    live-mount check.
     """
 
     zone: str
@@ -39,27 +31,26 @@ class Share:
     windows_path: str
     mac_path: str
 
+    def get_host_and_share_name(self) -> tuple[str, str]:
+        """Happens to be parsed from mac_path
 
-def smb_url_parts(smb_url: str) -> tuple[str, str] | None:
-    """Split an ``smb://host/share`` URL into ``(host, share_name)``."""
-    match = re.match(r"smb://([^/]+)/(.+)", smb_url)
-    if match is None:
-        return None
-    return match.group(1), match.group(2)
+        Raises:
+            ValueError: _description_
 
+        Returns:
+            tuple[str, str]: _description_
+        """
+        match = re.match(r"smb://([^/]+)/(.+)", self.mac_path)
+        if match is None:
+            raise ValueError(
+                "Malformed smb path for mac mounting"
+            )
+        return match.group(1), match.group(2)
 
-def janelia_url(share: Share) -> str | None:
-    """The unambiguous ``janelia://host/share_name`` identity for a share.
-
-    Unlike the mountpoint name macOS derives from the share name alone,
-    (host, share_name) never collides: two shares can both end up guessed
-    at the same ``/Volumes/<name>`` mountpoint on macOS, but their SMB
-    host+share coordinates are always distinct.
-    """
-    parts = smb_url_parts(share.mac_path)
-    if parts is None:
-        return None
-    return f"janelia://{parts[0]}/{parts[1]}"
+    @property
+    def uri(self) -> str:
+        host, share_name = self.get_host_and_share_name()
+        return f"janelia://{host}/{share_name}"
 
 
 def _live_smb_mounts() -> list[tuple[str, str, str]]:
@@ -109,7 +100,7 @@ def find_share_for_mac_mountpoint(
         if live_point != mountpoint:
             continue
         for share in shares:
-            if smb_url_parts(share.mac_path) == (mount_host, mount_share):
+            if share.get_host_and_share_name() == (mount_host, mount_share):
                 return share
     return None
 
@@ -167,7 +158,7 @@ def find_share_for_windows_drive(
         if local.rstrip("\\").upper() != drive_norm:
             continue
         for share in shares:
-            if smb_url_parts(share.mac_path) == (mount_host, mount_share):
+            if share.get_host_and_share_name() == (mount_host, mount_share):
                 return share
     return None
 
@@ -356,10 +347,9 @@ def resolve_janelia_url(
     best_share_name = ""
 
     for share in shares:
-        share_parts = smb_url_parts(share.mac_path)
-        if share_parts is None or share_parts[0] != host:
+        share_host, share_name = share.get_host_and_share_name()
+        if share_host != host:
             continue
-        share_name = share_parts[1]
         if rest != share_name and not rest.startswith(share_name + "/"):
             continue
         if len(share_name) > len(best_share_name):

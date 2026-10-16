@@ -6,14 +6,12 @@ import subprocess
 import time
 from pathlib import Path
 
-from janelia_pathlib._registry import (
+from ._registry import (
     Share,
     current_os,
     find_live_mount,
-    janelia_url,
     resolve,
     resolve_janelia_url,
-    smb_url_parts,
 )
 
 
@@ -26,14 +24,8 @@ def _ensure_mounted(share_info: Share, *, timeout: float = 30) -> Path | None:
     with the same name on different servers collide, and the second mounted
     gets suffixed (``/Volumes/<share>-1``).
     """
+    host, share_name = share_info.get_host_and_share_name()
     smb_url = share_info.mac_path
-    if not smb_url:
-        raise RuntimeError(f"No SMB URL available for share: {share_info.zone}")
-
-    parts = smb_url_parts(smb_url)
-    if parts is None:
-        raise RuntimeError(f"Malformed SMB URL for share: {share_info.zone}")
-    host, share_name = parts
 
     existing = find_live_mount(host, share_name)
     if existing is not None:
@@ -98,8 +90,6 @@ def to_janelia_uri(path: str | Path) -> str:
     if result is None:
         return str(path)
     share_info, subpath = result
-    url = janelia_url(share_info)
-    if url is None:
-        return str(path)
+    url = share_info.uri
     return url if not subpath else url + "/" + subpath
 
