@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "janelia-pathlib"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Auto-translating pathlib.Path for Janelia file shares"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,6 +13,12 @@ dependencies = [
 
 [project.scripts]
 janelia-paths-fetch = "janelia_pathlib._fetch:main"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/janelia_pathlib/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/janelia_pathlib"]
