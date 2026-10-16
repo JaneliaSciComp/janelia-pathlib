@@ -15,4 +15,3 @@ src/janelia_pathlib/shares.json
 
 # Version is derived from git tags at build time by hatch-vcs.
 src/janelia_pathlib/_version.py
-

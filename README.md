@@ -16,7 +16,7 @@ Or, to track the latest unreleased commit:
 uv add "janelia-pathlib @ git+https://github.com/JaneliaSciComp/janelia-pathlib"
 ```
 
-Requires Python 3.12+. Zero runtime dependencies beyond `platformdirs`.
+Requires Python 3.11+. Zero runtime dependencies beyond `platformdirs`.
 
 ## Quick start
 

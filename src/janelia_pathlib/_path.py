@@ -26,13 +26,16 @@ def from_janelia_uri(path_str: str, *, timeout: float = 30) -> str:
         raise RuntimeError(f"No known share for URL: {path_str}")
     share_info, subpath = result
 
-    if current_os() == "mac":
+    os_name = current_os()
+    if os_name == "mac":
         mount_point = ensure_mounted(share_info, timeout=timeout)
         if mount_point is None:
             raise RuntimeError(f"Failed to mount share: {share_info.zone}")
         base = str(mount_point)
+    elif os_name == "linux":
+        base = share_info.linux_path
     else:
-        base = getattr(share_info, f"{current_os()}_path")
+        base = share_info.windows_path
 
     return base if not subpath else base + "/" + subpath
 
@@ -52,4 +55,3 @@ def to_janelia_uri(path: str | Path) -> str:
     share_info, subpath = result
     url = share_info.uri
     return url if not subpath else url + "/" + subpath
-

@@ -30,7 +30,7 @@ def resolve_cache_path() -> Path:
 
     Env var JANELIA_PATHLIB_SHARES_PATH should be set to the json file name,
     not a parent directory.
-    
+
     Returns:
         The full path to the json file where the shares should be written/read.
     """
@@ -50,6 +50,7 @@ def no_fetch() -> bool:
     """
     val = os.environ.get(_ENV_NO_FETCH, "").strip().lower()
     return val not in ("", "0", "false", "no")
+
 
 def fetch_shares(cache_path: Path) -> None:
     """Fetch shares from the Fileglancer API and cache the response.

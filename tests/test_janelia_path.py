@@ -62,7 +62,9 @@ def test_to_janelia_uri_share_root_only():
 
 
 def test_to_janelia_uri_no_match_passthrough():
-    assert to_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
+    assert (
+        to_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
+    )
 
 
 def test_to_janelia_uri_longest_prefix_wins():
@@ -129,7 +131,9 @@ def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
 
 
 def test_from_janelia_uri_no_match_passthrough():
-    assert from_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
+    assert (
+        from_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
+    )
 
 
 @linux_only
@@ -272,7 +276,9 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
         with pytest.warns(UserWarning, match="No share data available"):
             assert _registry._load_shares() == {}
         # No known shares -> a real share path is left untranslated
-        assert to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
+        assert (
+            to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
+        )
     finally:
         _registry._load_shares.cache_clear()
 
@@ -328,14 +334,18 @@ def test_fetch_failure_falls_back_to_stale_cache(monkeypatch, tmp_path):
     stale cache (with a warning) instead of raising."""
     monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
     cache_file = tmp_path / "shares.json"
-    cache_file.write_text(json.dumps([
-        {
-            "zone": "Alpha",
-            "linux_path": "/labs/alpha/alphalab",
-            "windows_path": "\\\\fileserver.example.org\\alphalab",
-            "mac_path": "smb://fileserver.example.org/alphalab",
-        }
-    ]))
+    cache_file.write_text(
+        json.dumps(
+            [
+                {
+                    "zone": "Alpha",
+                    "linux_path": "/labs/alpha/alphalab",
+                    "windows_path": "\\\\fileserver.example.org\\alphalab",
+                    "mac_path": "smb://fileserver.example.org/alphalab",
+                }
+            ]
+        )
+    )
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(cache_file))
 
     def boom(*args, **kwargs):

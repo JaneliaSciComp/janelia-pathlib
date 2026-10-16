@@ -22,8 +22,7 @@ _OS_MAP = {"Darwin": "mac", "Linux": "linux", "Windows": "windows"}
 
 @dataclass(frozen=True, slots=True)
 class Share:
-    """A single file share entry, matching the Fileglancer API's own field names.
-    """
+    """A single file share entry, matching the Fileglancer API's own field names."""
 
     zone: str
     linux_path: str
@@ -41,9 +40,7 @@ class Share:
         """
         match = re.match(r"smb://([^/]+)/(.+)", self.mac_path)
         if match is None:
-            raise ValueError(
-                "Malformed smb path for mac mounting"
-            )
+            raise ValueError("Malformed smb path for mac mounting")
         return match.group(1), match.group(2)
 
     @property
@@ -68,7 +65,9 @@ def _find_share_by_fixed_path(
     best_share: Share | None = None
     best_prefix = ""
     for share in shares.values():
-        candidate = _to_forward_slash(re.sub(r"[/\\]+$", "", getattr(share, attr) or ""))
+        candidate = _to_forward_slash(
+            re.sub(r"[/\\]+$", "", getattr(share, attr) or "")
+        )
         if not candidate:
             continue
         if normalized.startswith(candidate) and len(candidate) > len(best_prefix):
