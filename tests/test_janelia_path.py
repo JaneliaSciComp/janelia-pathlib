@@ -34,7 +34,7 @@ def test_to_janelia_uri_from_linux_path():
 def test_to_janelia_uri_from_mac_path():
     """Resolving a Mac path requires live mount state (mac_path alone could
     be ambiguous), so this must be live-checked, not a static guess."""
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"],
             returncode=0,
@@ -98,7 +98,7 @@ def test_to_janelia_uri_resolves_colliding_mac_mount_via_live_state():
         "//user@nrs.example.org/foxtrot on /Volumes/foxtrot (smbfs, nodev)\n"
         "//user@nearline.example.org/foxtrot on /Volumes/foxtrot-1 (smbfs, nodev)"
     )
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"], returncode=0, stdout=mount_output
         )
@@ -118,7 +118,7 @@ def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
     mounted, or `mount` unavailable), the path is left unresolved rather than
     guessed from the static mac_path field -- a guess here could be wrong in
     exactly the same way the original mount-name collision bug was."""
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"], returncode=0, stdout=""
         )
@@ -149,7 +149,7 @@ def test_from_janelia_uri_unknown_share_raises():
 def test_from_janelia_uri_mounts_on_demand():
     """from_janelia_uri should trigger `open smb://...` when the share isn't
     mounted yet, then resolve the real mountpoint from live `mount` output."""
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
         mount_output_empty = subprocess.CompletedProcess(
             args=["mount"], returncode=0, stdout=""
         )
@@ -172,7 +172,7 @@ def test_from_janelia_uri_mounts_on_demand():
 @mac_only
 def test_from_janelia_uri_already_mounted():
     """from_janelia_uri should return the existing mountpoint without calling open."""
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"],
             returncode=0,
@@ -189,7 +189,7 @@ def test_from_janelia_uri_resolves_colliding_share_name():
     """When two shares share a mount-name (nrs/nearline foxtrot collision),
     from_janelia_uri must match on (host, share_name), not on the guessed
     /Volumes/<name> path."""
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"],
             returncode=0,
@@ -270,7 +270,7 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
     _registry._load_shares.cache_clear()
     try:
         with pytest.warns(UserWarning, match="No share data available"):
-            assert _registry._load_shares() == []
+            assert _registry._load_shares() == {}
         # No known shares -> a real share path is left untranslated
         assert to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
     finally:
@@ -292,7 +292,7 @@ def test_missing_cache_degrades_without_no_fetch(monkeypatch, tmp_path):
     _registry._load_shares.cache_clear()
     try:
         with pytest.warns(UserWarning, match="No share data available"):
-            assert _registry._load_shares() == []
+            assert _registry._load_shares() == {}
     finally:
         _registry._load_shares.cache_clear()
 
@@ -347,6 +347,6 @@ def test_fetch_failure_falls_back_to_stale_cache(monkeypatch, tmp_path):
         with pytest.warns(UserWarning, match="stale"):
             shares = _registry._load_shares()
         assert len(shares) == 1
-        assert shares[0].zone == "Alpha"
+        assert next(iter(shares.values())).zone == "Alpha"
     finally:
         _registry._load_shares.cache_clear()

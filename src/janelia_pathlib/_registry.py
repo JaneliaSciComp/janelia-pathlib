@@ -5,20 +5,19 @@ from __future__ import annotations
 import json
 import platform
 import re
-import subprocess
 import warnings
 from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING
 from urllib.error import URLError
 
+from . import _macos, _windows
 from ._fetch import fetch_shares, no_fetch, resolve_cache_path
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping
 
 _OS_MAP = {"Darwin": "mac", "Linux": "linux", "Windows": "windows"}
-_SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,121 +52,8 @@ class Share:
         return f"janelia://{host}/{share_name}"
 
 
-def _live_smb_mounts() -> list[tuple[str, str, str]]:
-    """List live SMB mounts as ``(host, share_name, mountpoint)`` from `mount` output."""
-    try:
-        output = subprocess.run(
-            ["mount"], capture_output=True, text=True, check=True
-        ).stdout
-    except (subprocess.CalledProcessError, OSError):
-        return []
-
-    mounts = []
-    for line in output.splitlines():
-        match = _SMB_MOUNT_LINE.match(line)
-        if match:
-            mounts.append((match.group(1), match.group(2), match.group(3)))
-    return mounts
-
-
-def find_live_mount(host: str, share_name: str) -> str | None:
-    """Find the real local mountpoint for an SMB share via live `mount` output.
-
-    macOS assigns the mountpoint name (e.g. ``/Volumes/<name>``) based only
-    on the share name, so two shares with the same name on different
-    servers collide and the second gets suffixed (``/Volumes/<name>-1``).
-    Matching on ``(host, share_name)`` against the live mount table is the
-    only reliable way to find which one is actually ours.
-    """
-    for mount_host, mount_share, mountpoint in _live_smb_mounts():
-        if mount_host == host and mount_share == share_name:
-            return mountpoint
-    return None
-
-
-def find_share_for_mac_mountpoint(
-    mountpoint: str, shares: Sequence[Share]
-) -> Share | None:
-    """Find which of ``shares`` is actually live-mounted at ``mountpoint``.
-
-    Disambiguates a bare ``/Volumes/<name>`` path when multiple shares would
-    guess the same mountpoint name (e.g. two shares on different hosts that
-    happen to share a name both default to ``/Volumes/<name>``, with the
-    second one actually landing at ``/Volumes/<name>-1``) by checking which
-    share's SMB host+name is actually mounted there right now.
-    """
-    for mount_host, mount_share, live_point in _live_smb_mounts():
-        if live_point != mountpoint:
-            continue
-        for share in shares:
-            if share.get_host_and_share_name() == (mount_host, mount_share):
-                return share
-    return None
-
-
-def _live_windows_drives() -> list[tuple[str, str, str]]:
-    """List live Windows SMB drive mappings as ``(host, share_name, drive)``.
-
-    Uses PowerShell's ``Get-SmbMapping``, which returns structured,
-    non-localized JSON -- unlike the legacy ``net use`` table, whose
-    headers, status words, and column layout are locale-dependent and
-    fragile to parse.
-
-    NOTE: implemented from documented PowerShell output format; not
-    verified against a real Windows machine.
-    """
-    try:
-        output = subprocess.run(
-            ["powershell", "-Command", "Get-SmbMapping | ConvertTo-Json"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    except (subprocess.CalledProcessError, OSError):
-        return []
-
-    if not output.strip():
-        return []
-    try:
-        data = json.loads(output)
-    except json.JSONDecodeError:
-        return []
-    if isinstance(data, dict):
-        data = [data]
-
-    drives = []
-    for entry in data:
-        remote = entry.get("RemotePath", "")
-        local = entry.get("LocalPath", "")
-        match = re.match(r"\\\\([^\\]+)\\(.+)", remote)
-        if match and local:
-            drives.append((match.group(1), match.group(2), local))
-    return drives
-
-
-def find_share_for_windows_drive(
-    drive: str, shares: Sequence[Share]
-) -> Share | None:
-    """Find which of ``shares`` is actually mapped to Windows drive letter ``drive``.
-
-    NOTE: implemented from documented PowerShell output format; not
-    verified against a real Windows machine.
-    """
-    drive_norm = drive.rstrip("\\").upper()
-    for mount_host, mount_share, local in _live_windows_drives():
-        if local.rstrip("\\").upper() != drive_norm:
-            continue
-        for share in shares:
-            if share.get_host_and_share_name() == (mount_host, mount_share):
-                return share
-    return None
-
-
-_WINDOWS_DRIVE_RE = re.compile(r"^([A-Za-z]:)(\\.*)?$")
-
-
 def _find_share_by_fixed_path(
-    path_str: str, shares: Sequence[Share], attr: str
+    path_str: str, shares: Mapping[tuple[str, str], Share], attr: str
 ) -> tuple[Share, str] | None:
     """Find which of ``shares`` a path falls under by prefix-matching ``attr``.
 
@@ -181,7 +67,7 @@ def _find_share_by_fixed_path(
 
     best_share: Share | None = None
     best_prefix = ""
-    for share in shares:
+    for share in shares.values():
         candidate = _to_forward_slash(re.sub(r"[/\\]+$", "", getattr(share, attr) or ""))
         if not candidate:
             continue
@@ -197,7 +83,9 @@ def _find_share_by_fixed_path(
     return best_share, subpath[1:] if subpath.startswith("/") else subpath
 
 
-def find_share_for_linux_mount(path_str: str, shares: Sequence[Share]) -> tuple[Share, str] | None:
+def find_share_for_linux_mount(
+    path_str: str, shares: Mapping[tuple[str, str], Share]
+) -> tuple[Share, str] | None:
     """Find which of ``shares`` a Linux path falls under.
 
     Linux mount points are fixed and admin-assigned, so (unlike macOS
@@ -207,7 +95,9 @@ def find_share_for_linux_mount(path_str: str, shares: Sequence[Share]) -> tuple[
     return _find_share_by_fixed_path(path_str, shares, "linux_path")
 
 
-def find_share_for_windows_unc(path_str: str, shares: Sequence[Share]) -> tuple[Share, str] | None:
+def find_share_for_windows_unc(
+    path_str: str, shares: Mapping[tuple[str, str], Share]
+) -> tuple[Share, str] | None:
     """Find which of ``shares`` a Windows UNC path (\\\\host\\share\\...) falls under.
 
     A UNC path already encodes the host, so (unlike a drive letter) it's
@@ -217,7 +107,7 @@ def find_share_for_windows_unc(path_str: str, shares: Sequence[Share]) -> tuple[
 
 
 def find_share_for_mounted_path(
-    path_str: str, os_name: str, shares: Sequence[Share]
+    path_str: str, os_name: str, shares: Mapping[tuple[str, str], Share]
 ) -> tuple[Share, str] | None:
     """Detect whether ``path_str`` falls under a mounted Janelia share.
 
@@ -241,17 +131,17 @@ def find_share_for_mounted_path(
         # /Volumes/<name>/rest... -> mountpoint is /Volumes/<name>
         if len(parts) >= 3 and parts[1] == "Volumes":
             mountpoint = "/".join(parts[:3])
-            share = find_share_for_mac_mountpoint(mountpoint, shares)
+            share = _macos.find_share_for_mac_mountpoint(mountpoint, shares)
             if share is not None:
                 subpath = normalized[len(mountpoint) :]
                 return share, subpath[1:] if subpath.startswith("/") else subpath
         return None
 
     if os_name == "windows":
-        match = _WINDOWS_DRIVE_RE.match(path_str.strip())
+        match = _windows.DRIVE_RE.match(path_str.strip())
         if match is not None:
             drive, rest = match.group(1), match.group(2) or ""
-            share = find_share_for_windows_drive(drive, shares)
+            share = _windows.find_share_for_windows_drive(drive, shares)
             if share is not None:
                 subpath = _to_forward_slash(rest)
                 return share, subpath[1:] if subpath.startswith("/") else subpath
@@ -265,9 +155,15 @@ def find_share_for_mounted_path(
 
 
 @cache
-def _load_shares() -> list[Share]:
+def _load_shares() -> dict[tuple[str, str], Share]:
     """Load share data, refreshing it from the network on every call unless
     JANELIA_PATHLIB_NO_FETCH is set.
+
+    Returns a mapping from ``(host, share_name)`` to ``Share`` -- the same
+    key every exact-match lookup (mac mountpoint, windows drive, janelia://
+    URL) needs, so those become O(1) dict lookups instead of linear scans.
+    Prefix-based matching (linux_path, windows UNC) just iterates
+    ``.values()``, same as it would a list.
 
     JANELIA_PATHLIB_NO_FETCH means "never touch the network": use the cache
     file as-is if present (however stale). Without it, a fetch failure
@@ -296,20 +192,19 @@ def _load_shares() -> list[Share]:
             "access to the Janelia network to populate the cache.",
             stacklevel=2,
         )
-        return []
+        return {}
 
     data_text = cache_file.read_text()
     raw = json.loads(data_text)
-    shares = []
+    shares = {}
     for entry in raw:
-        shares.append(
-            Share(
-                zone=entry["zone"],
-                linux_path=entry["linux_path"],
-                windows_path=entry["windows_path"],
-                mac_path=entry["mac_path"],
-            )
+        share = Share(
+            zone=entry["zone"],
+            linux_path=entry["linux_path"],
+            windows_path=entry["windows_path"],
+            mac_path=entry["mac_path"],
         )
+        shares[share.get_host_and_share_name()] = share
     return shares
 
 
@@ -326,7 +221,7 @@ def current_os() -> str:
 
 
 def resolve_janelia_url(
-    path_str: str, shares: Sequence[Share] | None = None
+    path_str: str, shares: Mapping[tuple[str, str], Share] | None = None
 ) -> tuple[Share, str] | None:
     """Match a ``janelia://host/share_name/subpath`` string against known shares.
 
@@ -343,30 +238,18 @@ def resolve_janelia_url(
         return None
     host, rest = match.group(1), match.group(2).rstrip("/")
 
-    best_share: Share | None = None
-    best_share_name = ""
-
-    for share in shares:
-        share_host, share_name = share.get_host_and_share_name()
-        if share_host != host:
-            continue
-        if rest != share_name and not rest.startswith(share_name + "/"):
-            continue
-        if len(share_name) > len(best_share_name):
-            best_share = share
-            best_share_name = share_name
-
-    if best_share is None:
+    # The share name is always exactly the first path segment (no real
+    # share name contains a literal "/", confirmed against all live
+    # Fileglancer data) -- a single O(1) dict lookup, no scanning needed.
+    share_name, _, subpath = rest.partition("/")
+    share = shares.get((host, share_name))
+    if share is None:
         return None
-
-    subpath = rest[len(best_share_name) :]
-    if subpath.startswith("/"):
-        subpath = subpath[1:]
-    return best_share, subpath
+    return share, subpath
 
 
 def resolve(
-    path_str: str, shares: Sequence[Share] | None = None
+    path_str: str, shares: Mapping[tuple[str, str], Share] | None = None
 ) -> tuple[Share, str] | None:
     """Match a path string against known shares on any OS.
 
