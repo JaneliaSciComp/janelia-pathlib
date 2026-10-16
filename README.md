@@ -1,254 +1,111 @@
 # janelia-pathlib
 
-A `pathlib.Path` subclass that auto-translates Janelia file share paths across operating systems.
+Translate Janelia file share paths to and from an unambiguous `janelia://` URI, so code can refer to a share without depending on OS-specific mount guesses.
 
-Janelia file shares are mounted at different paths on Linux, Mac, and Windows. This package lets you write a path from any OS and have it automatically resolve to the correct mount point on whatever machine your code is running on.
+Janelia file shares are mounted at different paths on Linux, Mac, and Windows, and on macOS two different shares can even collide on the same guessed mount point (e.g. `/Volumes/<name>`). This package gives you two functions to move between a local path and a stable, host-qualified identity that's never ambiguous.
 
 ## Installation
+
+```bash
+uv add janelia-pathlib
+```
+
+Or, to track the latest unreleased commit:
 
 ```bash
 uv add "janelia-pathlib @ git+https://github.com/JaneliaSciComp/janelia-pathlib"
 ```
 
-Requires Python 3.12+. Zero external dependencies.
+Requires Python 3.12+. Zero runtime dependencies beyond `platformdirs`.
 
 ## Quick start
 
 ```python
-from janelia_pathlib import JaneliaPath
+from janelia_pathlib import to_janelia_uri, from_janelia_uri
 
-# A Linux path used on Mac automatically becomes /Volumes/alphalab/sub/data
-p = JaneliaPath("/labs/alpha/alphalab/sub/data")
+# Canonicalize a local path to its unambiguous janelia:// identity
+uri = to_janelia_uri("/labs/alpha/alphalab/sub/data")
+# "janelia://fileserver.example.org/alphalab/sub/data"
 
-# It's a real pathlib.Path — use it anywhere you'd use Path
-for f in p.glob("*.zarr"):
-    print(f)
+# Resolve a janelia:// URI back to a real, usable local path
+path = from_janelia_uri(uri)
+# "/Volumes/alphalab/sub/data" (on Mac), "/labs/alpha/alphalab/sub/data" (on Linux), ...
 ```
 
-## Usage examples
+## Why `janelia://`?
 
-### Auto-translation in constructors
+A share's local mount point differs by OS, and on macOS it isn't even guaranteed to be unique: two shares with the same share name on different servers (e.g. `host-a.example.org/data` and `host-b.example.org/data`) both nominally want `/Volumes/data` — macOS mounts the second at `/Volumes/data-1` instead. A bare path string like `/Volumes/data` can't tell you which share that actually is.
 
-`JaneliaPath` detects which OS the input path belongs to and translates it to the current OS:
+`janelia://host/share/subpath` encodes the SMB host and share name directly, which is always unique — so it's safe to store, log, or pass between machines, and always resolves back to the *correct* share regardless of what macOS happened to name the mountpoint.
+
+## API
+
+### `to_janelia_uri(path)`
+
+Translate a local path in the **current OS's own format** to its canonical `janelia://host/share/subpath` form. A path in a different OS's format (e.g. a Windows UNC path passed in while running on Linux) is not recognized — only `janelia://` URIs are portable across OSes; a plain path is assumed to describe the machine it's running on.
 
 ```python
-from janelia_pathlib import JaneliaPath
-
-# On Mac:
-p = JaneliaPath("/labs/alpha/alphalab/experiment/results.csv")
-str(p)  # "/Volumes/alphalab/experiment/results.csv"
+from janelia_pathlib import to_janelia_uri
 
 # On Linux:
-p = JaneliaPath("/Volumes/alphalab/experiment/results.csv")
-str(p)  # "/labs/alpha/alphalab/experiment/results.csv"
+to_janelia_uri("/labs/alpha/alphalab/data")
+# "janelia://fileserver.example.org/alphalab/data"
 
-# Windows UNC paths work too:
-p = JaneliaPath(r"\\fileserver.example.org\alphalab\experiment\results.csv")
+# On Mac, once the share is mounted:
+to_janelia_uri("/Volumes/alphalab/data")
+# "janelia://fileserver.example.org/alphalab/data"
 ```
 
-Paths that don't match any known share pass through unchanged:
+**On macOS**, resolving a `/Volumes/...` path requires the share to be mounted already — `mac_path` alone can't be trusted as a guess (two shares can collide on the same mount name; see "Why `janelia://`?" above), so this checks live `mount` state rather than guessing. If the share isn't mounted, the path isn't recognized and passes through unchanged. Use `from_janelia_uri` first if you need to mount it.
+
+**Linux** paths always resolve without any live check, since Linux mount points are fixed and never ambiguous.
+
+Paths that don't match any known share are returned unchanged:
 
 ```python
-p = JaneliaPath("/tmp/local/scratch/file.txt")
-str(p)  # "/tmp/local/scratch/file.txt"
+to_janelia_uri("/tmp/local/scratch/file.txt")
+# "/tmp/local/scratch/file.txt"
 ```
 
-### Constructing from group name
+### `from_janelia_uri(path_str, *, timeout=30)`
 
-If you know the lab group and storage type, use `get_path()`:
+Translate a `janelia://host/share/subpath` string to a real, usable local path.
 
 ```python
-from janelia_pathlib import get_path, Storage
+from janelia_pathlib import from_janelia_uri
 
-# Get the primary share for the Bravo lab (on Mac)
-p = get_path("bravo")
-str(p)  # "/Volumes/bravolab"
-
-# Specify a storage type
-p = get_path("bravo", Storage.HOME)
-str(p)  # "/Volumes/bravo$"
-
-# Chain with subdirectories
-p = get_path("bravo") / "sub" / "data"
-str(p)  # "/Volumes/bravolab/sub/data"
+from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
+# "/Volumes/alphalab/data" (on Mac)
+# "/labs/alpha/alphalab/data" (on Linux)
 ```
 
-Also available as a classmethod: `JaneliaPath.from_share("bravo", Storage.HOME)`.
+On **macOS**, if the share isn't already mounted, this mounts it on demand (triggering the native SMB mount, which may prompt for credentials) and waits up to `timeout` seconds for the mount to appear, returning its *real* local mountpoint — not a guessed `/Volumes/<share>` path, which may not exist yet or may belong to a different, colliding share. Raises `RuntimeError` if the URI doesn't match a known share, or if mounting fails or times out.
 
-### Path joining with `/`
+On **Linux** and **Windows**, no mounting step is needed — shares are already available at a fixed path (Linux) or accessible directly via UNC path (Windows).
 
-The `/` operator works as expected and preserves the `JaneliaPath` type:
+A string that isn't a `janelia://` URI is returned unchanged:
 
 ```python
-p = JaneliaPath("/labs/bravo/bravolab") / "sub" / "data"
-type(p)  # <class 'janelia_pathlib.JaneliaPath'>
+from_janelia_uri("/tmp/local/scratch/file.txt")
+# "/tmp/local/scratch/file.txt"
 ```
 
-Incremental construction also works — translation is re-evaluated on each join, so a partial prefix that doesn't match any share will translate once the full share path is formed:
-
-```python
-# "/labs/bravo" alone doesn't match any share, so it passes through
-p = JaneliaPath("/labs/bravo")
-str(p)  # "/labs/bravo"
-
-# Joining completes the share path, triggering translation
-p = p / "bravolab"
-str(p)  # "/Volumes/bravolab"  (on Mac)
-```
-
-### Auto-mounting shares (macOS)
-
-On macOS, if a share isn't mounted yet, call `.mount()` to mount it automatically via SMB:
-
-```python
-p = JaneliaPath("/labs/alpha/alphalab/sub/data")
-
-# Mount the share if not already mounted (blocks until ready)
-p.mount()
-
-# Now you can use the path normally
-for f in p.glob("*.zarr"):
-    print(f)
-```
-
-`.mount()` returns `True` if the share is available after the operation, `False` if it timed out. It's a no-op if the share is already mounted. Only works on macOS — raises `RuntimeError` on other platforms.
-
-### Explicit cross-OS translation with `to_os()`
-
-Translate a path to a specific OS without depending on what machine you're on:
-
-```python
-p = JaneliaPath("/Volumes/bravolab/sub/data")
-
-p.to_os("linux")    # JaneliaPath('/labs/bravo/bravolab/sub/data')
-p.to_os("windows")  # JaneliaPath('\\\\fileserver.example.org\\bravolab\\sub\\data')
-p.to_os("mac")      # JaneliaPath('/Volumes/bravolab/sub/data')
-```
-
-### Inspecting share metadata
-
-The `.share` property returns a `Share` dataclass for the matched file share:
-
-```python
-p = JaneliaPath("/labs/charlie/charlie/data")
-
-p.share.name      # "Charlie"
-p.share.group     # "charlie"
-p.share.storage   # "primary"
-p.share.linux_path    # "/labs/charlie/charlie"
-p.share.mac_path      # "/Volumes/charlie"
-p.share.windows_path  # "\\\\fileserver.example.org\\charlie"
-```
-
-Returns `None` for paths that don't match any share:
-
-```python
-JaneliaPath("/tmp/file.txt").share  # None
-```
-
-### Functional API
-
-If you don't need the `Path` subclass, use `translate()`, `resolve()`, and `get_share()` directly:
-
-```python
-from janelia_pathlib import translate, resolve, get_share
-
-# Translate to a specific OS
-translate("/labs/bravo/bravolab/sub/data", "mac")
-# "/Volumes/bravolab/sub/data"
-
-translate("/labs/bravo/bravolab/sub/data", "windows")
-# "\\\\fileserver.example.org\\bravolab\\sub\\data"
-
-# Returns None for unrecognized paths
-translate("/tmp/local/file.txt", "mac")  # None
-
-# resolve() returns the matched Share and the relative subpath
-share, subpath = resolve("/labs/bravo/bravolab/sub/data")
-share.name   # "Bravo"
-subpath      # "sub/data"
-
-# get_share() looks up a share by group and storage type
-share = get_share("charlie", "primary")
-share.linux_path  # "/labs/charlie/charlie"
-```
-
-## API reference
-
-### `JaneliaPath(*args)`
-
-A `pathlib.Path` subclass. The constructor accepts the same arguments as `Path()` and auto-translates any recognized Janelia file share path to the current OS.
-
-**Class methods:**
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `from_share(group, storage="primary")` | `JaneliaPath` | Construct from group name and storage type |
-
-**Methods:**
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `to_os(target_os)` | `JaneliaPath` | Translate to `"linux"`, `"mac"`, or `"windows"` |
-| `mount(*, timeout=30)` | `bool` | Mount the share via SMB (macOS only) |
-
-**Properties:**
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `share` | `Share \| None` | The matched share entry, or `None` |
-
-All standard `pathlib.Path` methods and properties (`exists()`, `read_text()`, `glob()`, `parent`, `name`, `stem`, etc.) work as expected.
-
-### `get_path(group, storage="primary")`
-
-Get a `JaneliaPath` for a share by group name and storage type. Returns the path resolved to the current OS. Raises `KeyError` if no match is found.
-
-### `translate(path_str, target_os=None)`
-
-Translate a path string to the target OS format. Returns `None` if the path doesn't match any known share. Defaults to the current OS if `target_os` is omitted.
-
-### `resolve(path_str)`
-
-Match a path string against known shares. Returns `(Share, subpath)` where `subpath` is the relative portion after the share mount prefix, or `None` if no share matches.
-
-### `get_share(group, storage="primary")`
-
-Look up a `Share` by group name and storage type. Raises `KeyError` if no match is found.
-
-### `current_os()`
-
-Returns the current OS as `"linux"`, `"mac"`, or `"windows"`.
-
-### `Share`
-
-A frozen dataclass with fields: `name`, `group`, `storage`, `linux_path`, `mac_path`, `windows_path`.
-
-### `Storage`
-
-A `StrEnum` of storage types. Can be used as plain strings or enum values:
-
-| Value | String | Description |
-|-------|--------|-------------|
-| `Storage.PRIMARY` | `"primary"` | Main lab file share |
-| `Storage.HOME` | `"home"` | User home directories |
-| `Storage.SCRATCH` | `"scratch"` | Scratch storage |
-| `Storage.ARCHIVE` | `"archive"` | Archive / nearline storage |
-| `Storage.NEARLINE` | `"nearline"` | Nearline storage (legacy, same as archive) |
-
-Since `Storage` is a `StrEnum`, you can use either `Storage.HOME` or the string `"home"` interchangeably.
+Both functions round-trip: `from_janelia_uri(to_janelia_uri(p))` resolves back to a valid local path for `p`'s share, and non-Janelia paths pass through both functions untouched.
 
 ## Share data
 
-Share data is **not** bundled with the package — it's fetched at runtime from the [Fileglancer API](https://fileglancer.int.janelia.org/api/file-share-paths) into your user cache directory:
+Share data is **not** bundled with the package — it's fetched from the [Fileglancer API](https://fileglancer.int.janelia.org/api/file-share-paths) and cached in your user cache directory:
 
 - **macOS**: `~/Library/Caches/janelia-pathlib/shares.json`
 - **Linux**: `~/.cache/janelia-pathlib/shares.json`
 - **Windows**: `%LOCALAPPDATA%\janelia-pathlib\Cache\shares.json`
 
-The first time you import `janelia_pathlib` on a machine without a cached file, it auto-fetches from the API. This requires access to the Janelia network.
+**Every time** `to_janelia_uri`/`from_janelia_uri` first needs share data in a process, the library tries to refresh this cache from the API (once per process — subsequent calls in the same process reuse that result, so a long-running process won't pick up newly added shares until restarted). This requires access to the Janelia network, but a failed refresh never breaks translation outright:
 
-To refresh the cache (e.g. after new shares are added upstream):
+- If the refresh fails but a cache file already exists, the **existing (possibly stale) cache is used instead**, with a `UserWarning`.
+- If the refresh fails and there's **no cache file at all**, share data degrades to "no known shares" (also with a warning) — paths just pass through untranslated rather than raising.
+
+To force a refresh manually (e.g. to pick up a newly added share before your next run):
 
 ```bash
 janelia-paths-fetch
@@ -262,21 +119,32 @@ export JANELIA_PATHLIB_SHARES_PATH=/path/to/shares.json
 
 ### Running offline (CI)
 
-The auto-fetch needs the Janelia network, and by default a missing cache with no
-network raises `RuntimeError`. For environments that can't reach the network
-(e.g. CI on cloud runners), disable the fetch:
+For environments that can't reach the network at all (e.g. CI on cloud runners), disable fetching entirely:
 
 ```bash
 export JANELIA_PATHLIB_NO_FETCH=1
 ```
 
-With this set and no cached share data, the registry loads no shares and paths
-**pass through untranslated** instead of raising — so code that constructs
-`JaneliaPath` keeps working (non-share paths behave exactly like `pathlib.Path`).
+With this set, the network is never touched: the existing cache file is used as-is if present (however stale), or share data degrades to "no known shares" if not — same `to_janelia_uri`/`from_janelia_uri` behavior as a failed fetch, just without ever attempting the network call. This is also what this project's own test suite uses, pointed at a small fixture file via `JANELIA_PATHLIB_SHARES_PATH`, so tests never depend on (or accidentally overwrite) real network data.
 
 The fetch also has a timeout (default 10s) so an unreachable network can't hang
-the first import; override it with:
+for long; override it with:
 
 ```bash
 export JANELIA_PATHLIB_FETCH_TIMEOUT=5
 ```
+
+## Releasing
+
+The package version is derived automatically from git tags (via `hatch-vcs`) —
+there's no version to bump in `pyproject.toml`. To cut a release, tag a commit
+on `main` and push the tag:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Pushing a `v*` tag runs the full test matrix in CI and, if it passes, builds
+and publishes the package to PyPI via
+[trusted publishing](https://docs.pypi.org/trusted-publishers/).

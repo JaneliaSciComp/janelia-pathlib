@@ -9,3 +9,9 @@ from pathlib import Path
 os.environ["JANELIA_PATHLIB_SHARES_PATH"] = str(
     Path(__file__).parent / "fixtures" / "shares.json"
 )
+
+# _load_shares() refreshes from the network on every call by default; tests
+# must never depend on (or overwrite) real network data, so disable fetching
+# globally. Tests that specifically exercise fetch behavior override this
+# themselves via monkeypatch.
+os.environ["JANELIA_PATHLIB_NO_FETCH"] = "1"

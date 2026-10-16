@@ -2,379 +2,235 @@
 
 Tests run against a fictional share fixture (see tests/fixtures/shares.json
 and tests/conftest.py). No real Janelia share data is referenced here.
-
-Tests that exercise JaneliaPath (a pathlib.Path subclass) are restricted to
-the OS whose path separators they expect, since pathlib always uses the
-native separator regardless of mocking.
 """
 
+import json
 import subprocess
 import sys
-from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
 
 import pytest
 
-from janelia_pathlib import JaneliaPath, Share, _fetch, _registry, get_path, get_share, resolve, translate
+from janelia_pathlib import from_janelia_uri, to_janelia_uri
+from janelia_pathlib import _fetch, _registry
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="macOS paths")
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux paths")
-unix_only = pytest.mark.skipif(sys.platform == "win32", reason="Unix paths")
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows paths")
 
 
-# --- translate() tests ---
-# These are pure string functions and run on every OS.
+# --- to_janelia_uri() tests ---
 
 
-def test_translate_linux_to_mac():
-    assert translate("/labs/alpha/alphalab/data", "mac") == "/Volumes/alphalab/data"
-
-
-def test_translate_linux_to_windows():
+def test_to_janelia_uri_from_linux_path():
     assert (
-        translate("/labs/alpha/alphalab/data", "windows")
-        == "\\\\fileserver.example.org\\alphalab\\data"
+        to_janelia_uri("/labs/alpha/alphalab/data")
+        == "janelia://fileserver.example.org/alphalab/data"
     )
 
 
-def test_translate_mac_to_linux():
-    assert translate("/Volumes/alphalab/data", "linux") == "/labs/alpha/alphalab/data"
+@mac_only
+def test_to_janelia_uri_from_mac_path():
+    """Resolving a Mac path requires live mount state (mac_path alone could
+    be ambiguous), so this must be live-checked, not a static guess."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["mount"],
+            returncode=0,
+            stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
+        )
+        assert (
+            to_janelia_uri("/Volumes/alphalab/data")
+            == "janelia://fileserver.example.org/alphalab/data"
+        )
 
 
-def test_translate_windows_to_linux():
+@windows_only
+def test_to_janelia_uri_from_windows_path():
     assert (
-        translate("\\\\fileserver.example.org\\alphalab\\data", "linux")
+        to_janelia_uri("\\\\fileserver.example.org\\alphalab\\data")
+        == "janelia://fileserver.example.org/alphalab/data"
+    )
+
+
+def test_to_janelia_uri_share_root_only():
+    assert (
+        to_janelia_uri("/labs/alpha/alphalab")
+        == "janelia://fileserver.example.org/alphalab"
+    )
+
+
+def test_to_janelia_uri_no_match_passthrough():
+    assert to_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
+
+
+def test_to_janelia_uri_longest_prefix_wins():
+    """Both /labs/charlie and /labs/charlie/charlie match; the longer wins."""
+    assert (
+        to_janelia_uri("/labs/charlie/charlie/data")
+        == "janelia://fileserver.example.org/charlie/data"
+    )
+
+
+def test_to_janelia_uri_trailing_slash():
+    assert (
+        to_janelia_uri("/labs/alpha/alphalab/")
+        == "janelia://fileserver.example.org/alphalab"
+    )
+
+
+@windows_only
+def test_to_janelia_uri_windows_forward_slash():
+    """Windows paths with forward slashes should still match."""
+    assert (
+        to_janelia_uri("//fileserver.example.org/alphalab/data")
+        == "janelia://fileserver.example.org/alphalab/data"
+    )
+
+
+@mac_only
+def test_to_janelia_uri_resolves_colliding_mac_mount_via_live_state():
+    """Two shares (nrs/nearline) both nominally want /Volumes/foxtrot on macOS.
+    Static string matching alone can't tell them apart -- live `mount` output,
+    which records the actual SMB host for each mountpoint, must be checked."""
+    mount_output = (
+        "//user@nrs.example.org/foxtrot on /Volumes/foxtrot (smbfs, nodev)\n"
+        "//user@nearline.example.org/foxtrot on /Volumes/foxtrot-1 (smbfs, nodev)"
+    )
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["mount"], returncode=0, stdout=mount_output
+        )
+        assert (
+            to_janelia_uri("/Volumes/foxtrot/data")
+            == "janelia://nrs.example.org/foxtrot/data"
+        )
+        assert (
+            to_janelia_uri("/Volumes/foxtrot-1/data")
+            == "janelia://nearline.example.org/foxtrot/data"
+        )
+
+
+@mac_only
+def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
+    """If live `mount` output has nothing at this mountpoint (e.g. not actually
+    mounted, or `mount` unavailable), the path is left unresolved rather than
+    guessed from the static mac_path field -- a guess here could be wrong in
+    exactly the same way the original mount-name collision bug was."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["mount"], returncode=0, stdout=""
+        )
+        assert to_janelia_uri("/Volumes/alphalab/data") == "/Volumes/alphalab/data"
+
+
+# --- from_janelia_uri() tests ---
+
+
+def test_from_janelia_uri_no_match_passthrough():
+    assert from_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
+
+
+@linux_only
+def test_from_janelia_uri_on_linux():
+    assert (
+        from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
         == "/labs/alpha/alphalab/data"
     )
 
 
-def test_translate_no_match():
-    assert translate("/tmp/local/file.txt", "mac") is None
-
-
-def test_translate_preserves_deep_subpath():
-    assert (
-        translate("/labs/bravo/bravolab/sub/dir/file.zarr", "mac")
-        == "/Volumes/bravolab/sub/dir/file.zarr"
-    )
-
-
-def test_translate_share_root_only():
-    assert translate("/labs/alpha/alphalab", "mac") == "/Volumes/alphalab"
-
-
-def test_translate_scratch():
-    assert translate("/scratch/delta/data", "mac") == "/Volumes/delta_scratch/data"
-
-
-def test_translate_nearline_archive():
-    result = translate("/archive/echo/data", "mac")
-    assert result is not None
-    assert result.startswith("/Volumes/")
-
-
-# --- resolve() tests ---
-
-
-def test_resolve_returns_share_and_subpath():
-    result = resolve("/labs/alpha/alphalab/deep/nested/file.txt")
-    assert result is not None
-    share, subpath = result
-    assert share.name == "Alpha"
-    assert share.storage == "primary"
-    assert subpath == "deep/nested/file.txt"
-
-
-def test_resolve_no_match():
-    assert resolve("/some/random/path") is None
-
-
-def test_resolve_exact_share_root():
-    result = resolve("/labs/alpha/alphalab")
-    assert result is not None
-    share, subpath = result
-    assert subpath == ""
-
-
-def test_resolve_longest_prefix_wins():
-    """Both /labs/charlie and /labs/charlie/charlie match; the longer wins."""
-    result = resolve("/labs/charlie/charlie/data")
-    assert result is not None
-    share, subpath = result
-    assert share.linux_path == "/labs/charlie/charlie"
-    assert share.storage == "primary"
-    assert subpath == "data"
-
-
-# --- JaneliaPath constructor tests ---
+def test_from_janelia_uri_unknown_share_raises():
+    with pytest.raises(RuntimeError, match="No known share"):
+        from_janelia_uri("janelia://unknown.example.org/nope/data")
 
 
 @mac_only
-def test_janeliapath_translates_on_mac():
-    p = JaneliaPath("/labs/charlie/charlie/data/file.txt")
-    assert str(p) == "/Volumes/charlie/data/file.txt"
-
-
-@linux_only
-def test_janeliapath_translates_on_linux():
-    p = JaneliaPath("/Volumes/alphalab/data")
-    assert str(p) == "/labs/alpha/alphalab/data"
-
-
-@unix_only
-def test_janeliapath_no_match_passthrough():
-    p = JaneliaPath("/tmp/local/file.txt")
-    assert str(p) == "/tmp/local/file.txt"
-
-
-@mac_only
-def test_janeliapath_already_correct_os():
-    """A Mac path on Mac should pass through unchanged."""
-    p = JaneliaPath("/Volumes/alphalab/data")
-    assert str(p) == "/Volumes/alphalab/data"
-
-
-def test_janeliapath_is_path_subclass():
-    from pathlib import Path
-
-    p = JaneliaPath._from_raw("/labs/alpha/alphalab")
-    assert isinstance(p, Path)
-    assert isinstance(p, JaneliaPath)
-
-
-@mac_only
-def test_janeliapath_join_with_slash():
-    p = JaneliaPath("/labs/bravo/bravolab") / "sub" / "data"
-    assert str(p) == "/Volumes/bravolab/sub/data"
-    assert isinstance(p, JaneliaPath)
-
-
-@mac_only
-def test_janeliapath_incremental_join_translates():
-    """A partial prefix passes through, but joining to a full share triggers translation."""
-    p = JaneliaPath("/labs/bravo")
-    assert str(p) == "/labs/bravo"  # no match yet
-
-    p = p / "bravolab"
-    assert str(p) == "/Volumes/bravolab"  # now matches, translated
-
-
-# --- to_os() tests ---
-
-
-@unix_only
-def test_to_os_mac_to_linux():
-    p = JaneliaPath._from_raw("/Volumes/alphalab/data")
-    linux = p.to_os("linux")
-    assert str(linux) == "/labs/alpha/alphalab/data"
-    assert isinstance(linux, JaneliaPath)
-
-
-def test_to_os_mac_to_windows():
-    p = JaneliaPath._from_raw("/Volumes/alphalab/data")
-    win = p.to_os("windows")
-    assert str(win) == "\\\\fileserver.example.org\\alphalab\\data"
-
-
-def test_to_os_no_match_returns_self():
-    p = JaneliaPath._from_raw("/tmp/local/file.txt")
-    result = p.to_os("linux")
-    assert result is p
-
-
-# --- share property tests ---
-
-
-@mac_only
-def test_share_property():
-    p = JaneliaPath("/labs/alpha/alphalab/experiment")
-    share = p.share
-    assert isinstance(share, Share)
-    assert share.name == "Alpha"
-    assert share.storage == "primary"
-    assert share.linux_path == "/labs/alpha/alphalab"
-    assert share.mac_path == "/Volumes/alphalab"
-
-
-@mac_only
-def test_share_property_no_match():
-    p = JaneliaPath("/tmp/local/file.txt")
-    assert p.share is None
-
-
-# --- get_share() and from_share() tests ---
-# get_share() returns a Share dataclass (no pathlib), runs everywhere.
-
-
-def test_get_share():
-    share = get_share("bravo", "primary")
-    assert share.name == "Bravo"
-    assert share.group == "bravo"
-    assert share.storage == "primary"
-    assert share.linux_path == "/labs/bravo/bravolab"
-
-
-def test_get_share_home():
-    share = get_share("bravo", "home")
-    assert share.storage == "home"
-
-
-def test_get_share_default_storage():
-    share = get_share("alpha")
-    assert share.storage == "primary"
-
-
-def test_get_share_not_found():
-    with pytest.raises(KeyError):
-        get_share("nonexistent_group_xyz")
-
-
-@mac_only
-def test_from_share_on_mac():
-    p = JaneliaPath.from_share("bravo")
-    assert str(p) == "/Volumes/bravolab"
-    assert isinstance(p, JaneliaPath)
-
-
-@linux_only
-def test_from_share_on_linux():
-    p = JaneliaPath.from_share("bravo")
-    assert str(p) == "/labs/bravo/bravolab"
-
-
-@mac_only
-def test_from_share_home():
-    p = JaneliaPath.from_share("bravo", "home")
-    assert str(p) == "/Volumes/bravo$"
-
-
-@mac_only
-def test_from_share_join_subpath():
-    p = JaneliaPath.from_share("bravo") / "sub" / "data"
-    assert str(p) == "/Volumes/bravolab/sub/data"
-
-
-def test_from_share_not_found():
-    with pytest.raises(KeyError):
-        JaneliaPath.from_share("nonexistent_group_xyz")
-
-
-# --- get_path() tests ---
-
-
-@mac_only
-def test_get_path_on_mac():
-    p = get_path("bravo")
-    assert str(p) == "/Volumes/bravolab"
-    assert isinstance(p, JaneliaPath)
-
-
-@mac_only
-def test_get_path_with_storage():
-    p = get_path("bravo", "home")
-    assert str(p) == "/Volumes/bravo$"
-    assert isinstance(p, JaneliaPath)
-
-
-def test_get_path_not_found():
-    with pytest.raises(KeyError):
-        get_path("nonexistent_group_xyz")
-
-
-# --- mount() tests ---
-
-
-def _mount_output(*entries: tuple[str, str, str]) -> subprocess.CompletedProcess:
-    """Build a fake `mount` stdout with the given (host, share, mountpoint) smbfs entries."""
-    lines = [
-        f"//malinmayorc@{host}/{share} on {mountpoint} (smbfs, nodev, nosuid)"
-        for host, share, mountpoint in entries
-    ]
-    return subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="\n".join(lines))
-
-
-@mac_only
-def test_mount_calls_open_with_smb_url():
-    """mount() should call 'open smb://...' when share is not mounted, then resolve
-    the real mountpoint from live `mount` output (not the guessed mac_path).
-
-    _path.py and _registry.py both do `import subprocess` and call
-    `subprocess.run`, so they share the same module-level `run` attribute --
-    one patch covers both call sites, there's no such thing as patching them
-    independently.
-    """
-    p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
-        mock_run.side_effect = [
-            _mount_output(),  # not mounted yet
-            None,  # the `open` call
-            _mount_output(("fileserver.example.org", "alphalab", "/Volumes/alphalab")),
-        ]
-        result = p.mount(timeout=2)
-        assert result == Path("/Volumes/alphalab")
+def test_from_janelia_uri_mounts_on_demand():
+    """from_janelia_uri should trigger `open smb://...` when the share isn't
+    mounted yet, then resolve the real mountpoint from live `mount` output."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mount_output_empty = subprocess.CompletedProcess(
+            args=["mount"], returncode=0, stdout=""
+        )
+        mount_output_found = subprocess.CompletedProcess(
+            args=["mount"],
+            returncode=0,
+            stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
+        )
+        mock_run.side_effect = [mount_output_empty, None, mount_output_found]
+        result = from_janelia_uri(
+            "janelia://fileserver.example.org/alphalab/data", timeout=2
+        )
+        assert result == "/Volumes/alphalab/data"
         open_call = mock_run.call_args_list[1]
         args = open_call[0][0]
         assert args[0] == "open"
-        assert args[1].startswith("smb://")
+        assert args[1] == "smb://fileserver.example.org/alphalab"
 
 
 @mac_only
-def test_mount_already_mounted():
-    """mount() should return the existing mountpoint immediately without calling open."""
-    p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
-        mock_run.return_value = _mount_output(
-            ("fileserver.example.org", "alphalab", "/Volumes/alphalab")
+def test_from_janelia_uri_already_mounted():
+    """from_janelia_uri should return the existing mountpoint without calling open."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["mount"],
+            returncode=0,
+            stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
         )
-        result = p.mount()
-        assert result == Path("/Volumes/alphalab")
+        result = from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
+        assert result == "/Volumes/alphalab/data"
         for call in mock_run.call_args_list:
             assert call[0][0][0] != "open"
 
 
 @mac_only
-def test_mount_resolves_colliding_share_name():
-    """When two shares share a mount-name (e.g. nrs/nearline collisions), mount()
-    must match on (host, share_name), not on the guessed /Volumes/<name> path."""
-    p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
-    with patch("janelia_pathlib._registry.subprocess.run") as mock_run:
-        mock_run.return_value = _mount_output(
-            ("fileserver.example.org", "alphalab", "/Volumes/alphalab"),
-            ("otherserver.example.org", "alphalab", "/Volumes/alphalab-1"),
+def test_from_janelia_uri_resolves_colliding_share_name():
+    """When two shares share a mount-name (nrs/nearline foxtrot collision),
+    from_janelia_uri must match on (host, share_name), not on the guessed
+    /Volumes/<name> path."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["mount"],
+            returncode=0,
+            stdout=(
+                "//user@nrs.example.org/foxtrot on /Volumes/foxtrot (smbfs, nodev)\n"
+                "//user@nearline.example.org/foxtrot on /Volumes/foxtrot-1 (smbfs, nodev)"
+            ),
         )
-        result = p.mount()
-        assert result == Path("/Volumes/alphalab")
+        assert (
+            from_janelia_uri("janelia://nrs.example.org/foxtrot/data")
+            == "/Volumes/foxtrot/data"
+        )
+        assert (
+            from_janelia_uri("janelia://nearline.example.org/foxtrot/data")
+            == "/Volumes/foxtrot-1/data"
+        )
 
 
 @linux_only
-def test_mount_raises_on_linux():
-    p = JaneliaPath._from_raw("/labs/alpha/alphalab/data")
-    with pytest.raises(RuntimeError, match="only supported on macOS"):
-        p.mount()
-
-
-@mac_only
-def test_mount_raises_for_unknown_path():
-    p = JaneliaPath("/tmp/not/a/share")
-    with pytest.raises(RuntimeError, match="No known share"):
-        p.mount()
-
-
-# --- Edge cases ---
-
-
-def test_translate_trailing_slash():
-    assert translate("/labs/alpha/alphalab/", "mac") == "/Volumes/alphalab"
-
-
-def test_translate_windows_forward_slash():
-    """Windows paths with forward slashes should still match."""
+def test_from_janelia_uri_raises_on_linux_mount_failure():
+    """Linux never mounts (fixed mount points), so this shouldn't try to."""
     assert (
-        translate("//fileserver.example.org/alphalab/data", "linux")
+        from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
         == "/labs/alpha/alphalab/data"
     )
+
+
+# --- round trip ---
+
+
+def test_round_trip_through_janelia_uri():
+    uri = to_janelia_uri("/labs/alpha/alphalab/data")
+    # On Linux, from_janelia_uri needs no mounting and resolves purely from
+    # static registry data, so the round trip works without any live state.
+    if sys.platform == "linux":
+        assert from_janelia_uri(uri) == "/labs/alpha/alphalab/data"
+
+
+def test_round_trip_non_janelia_path_is_untouched():
+    p = "/tmp/local/scratch/file.txt"
+    assert from_janelia_uri(to_janelia_uri(p)) == p
 
 
 # --- Offline / fetch robustness ---
@@ -405,14 +261,6 @@ def test_fetch_shares_uses_timeout(monkeypatch, tmp_path):
     assert captured["timeout"] > 0
 
 
-def test_fetch_timeout_env_override(monkeypatch):
-
-    monkeypatch.setenv("JANELIA_PATHLIB_FETCH_TIMEOUT", "3.5")
-    assert _fetch.fetch_timeout() == 3.5
-    monkeypatch.setenv("JANELIA_PATHLIB_FETCH_TIMEOUT", "not-a-number")
-    assert _fetch.fetch_timeout() == _fetch._DEFAULT_TIMEOUT
-
-
 def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
     """With JANELIA_PATHLIB_NO_FETCH set and no cache, load returns no shares and
     paths pass through untranslated instead of raising."""
@@ -421,15 +269,19 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
     _registry._load_shares.cache_clear()
     try:
-        assert _registry._load_shares() == []
+        with pytest.warns(UserWarning, match="No share data available"):
+            assert _registry._load_shares() == {}
         # No known shares -> a real share path is left untranslated
-        assert translate("/labs/alpha/alphalab/data", "mac") is None
+        assert to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
     finally:
         _registry._load_shares.cache_clear()
 
 
-def test_missing_cache_raises_without_no_fetch(monkeypatch, tmp_path):
-    """Without the opt-out, a missing cache + failed fetch still raises (unchanged)."""
+def test_missing_cache_degrades_without_no_fetch(monkeypatch, tmp_path):
+    """Without the opt-out, a missing cache + failed fetch still degrades to no
+    known shares (with a warning) instead of raising -- same end state as the
+    no_fetch case, just reached via a failed fetch attempt instead of an
+    explicit opt-out."""
     monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
 
@@ -439,7 +291,62 @@ def test_missing_cache_raises_without_no_fetch(monkeypatch, tmp_path):
     monkeypatch.setattr("urllib.request.urlopen", boom)
     _registry._load_shares.cache_clear()
     try:
-        with pytest.raises(RuntimeError, match="auto-fetch failed"):
-            _registry._load_shares()
+        with pytest.warns(UserWarning, match="No share data available"):
+            assert _registry._load_shares() == {}
+    finally:
+        _registry._load_shares.cache_clear()
+
+
+def test_load_shares_refetches_every_call(monkeypatch, tmp_path):
+    """Without JANELIA_PATHLIB_NO_FETCH, _load_shares() always attempts a fresh
+    fetch -- not just when the cache file is missing."""
+    monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
+    cache_file = tmp_path / "shares.json"
+    monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(cache_file))
+
+    call_count = {"n": 0}
+
+    def fake_fetch_shares(path):
+        call_count["n"] += 1
+        path.write_text("[]")
+
+    monkeypatch.setattr(_registry, "fetch_shares", fake_fetch_shares)
+    _registry._load_shares.cache_clear()
+    try:
+        _registry._load_shares.cache_clear()
+        _registry._load_shares()
+        assert call_count["n"] == 1
+        _registry._load_shares.cache_clear()
+        _registry._load_shares()
+        assert call_count["n"] == 2
+    finally:
+        _registry._load_shares.cache_clear()
+
+
+def test_fetch_failure_falls_back_to_stale_cache(monkeypatch, tmp_path):
+    """If the network fetch fails but a cache file already exists, use the
+    stale cache (with a warning) instead of raising."""
+    monkeypatch.delenv("JANELIA_PATHLIB_NO_FETCH", raising=False)
+    cache_file = tmp_path / "shares.json"
+    cache_file.write_text(json.dumps([
+        {
+            "zone": "Alpha",
+            "linux_path": "/labs/alpha/alphalab",
+            "windows_path": "\\\\fileserver.example.org\\alphalab",
+            "mac_path": "smb://fileserver.example.org/alphalab",
+        }
+    ]))
+    monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(cache_file))
+
+    def boom(*args, **kwargs):
+        raise URLError("offline")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    _registry._load_shares.cache_clear()
+    try:
+        with pytest.warns(UserWarning, match="stale"):
+            shares = _registry._load_shares()
+        assert len(shares) == 1
+        assert next(iter(shares.values())).zone == "Alpha"
     finally:
         _registry._load_shares.cache_clear()
