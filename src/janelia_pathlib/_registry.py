@@ -65,9 +65,7 @@ def _find_share_by_fixed_path(
     best_share: Share | None = None
     best_prefix = ""
     for share in shares.values():
-        candidate = _to_forward_slash(
-            re.sub(r"[/\\]+$", "", getattr(share, attr) or "")
-        )
+        candidate = _to_forward_slash(re.sub(r"[/\\]+$", "", getattr(share, attr) or ""))
         if not candidate:
             continue
         if normalized.startswith(candidate) and len(candidate) > len(best_prefix):

@@ -1,5 +1,9 @@
 # janelia-pathlib
 
+[![CI](https://github.com/JaneliaSciComp/janelia_pathlib/actions/workflows/ci.yaml/badge.svg)](https://github.com/JaneliaSciComp/janelia_pathlib/actions/workflows/ci.yaml)
+[![codecov](https://codecov.io/gh/JaneliaSciComp/janelia_pathlib/branch/main/graph/badge.svg)](https://codecov.io/gh/JaneliaSciComp/janelia_pathlib)
+[![PyPI](https://img.shields.io/pypi/v/janelia-pathlib.svg)](https://pypi.org/project/janelia-pathlib)
+
 Translate Janelia file share paths to and from an unambiguous `janelia://` URI, so code can refer to a share without depending on OS-specific mount guesses.
 
 Janelia file shares are mounted at different paths on Linux, Mac, and Windows, and on macOS two different shares can even collide on the same guessed mount point (e.g. `/Volumes/<name>`). This package gives you two functions to move between a local path and a stable, host-qualified identity that's never ambiguous.
@@ -13,7 +17,7 @@ uv add janelia-pathlib
 Or, to track the latest unreleased commit:
 
 ```bash
-uv add "janelia-pathlib @ git+https://github.com/JaneliaSciComp/janelia-pathlib"
+uv add "janelia-pathlib @ git+https://github.com/JaneliaSciComp/janelia_pathlib"
 ```
 
 Requires Python 3.11+. Zero runtime dependencies beyond `platformdirs`.
@@ -134,17 +138,16 @@ for long; override it with:
 export JANELIA_PATHLIB_FETCH_TIMEOUT=5
 ```
 
-## Releasing
+## Development
 
-The package version is derived automatically from git tags (via `hatch-vcs`) —
-there's no version to bump in `pyproject.toml`. To cut a release, tag a commit
-on `main` and push the tag:
+This project uses [uv](https://docs.astral.sh/uv/) and
+[just](https://just.systems). To set up a development environment:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git clone https://github.com/JaneliaSciComp/janelia_pathlib
+cd janelia_pathlib
+just install
 ```
 
-Pushing a `v*` tag runs the full test matrix in CI and, if it passes, builds
-and publishes the package to PyPI via
-[trusted publishing](https://docs.pypi.org/trusted-publishers/).
+See [CONTRIBUTING.md](https://github.com/JaneliaSciComp/janelia_pathlib/blob/main/CONTRIBUTING.md)
+for more, or run `just` to list all available recipes.

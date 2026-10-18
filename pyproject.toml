@@ -1,42 +1,131 @@
+# https://peps.python.org/pep-0517/
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=70", "setuptools-scm>=8"]
 
+# https://peps.python.org/pep-0621/
 [project]
 name = "janelia-pathlib"
-dynamic = ["version"]
 description = "Translate Janelia file share paths to/from an unambiguous janelia:// URI"
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
-    "platformdirs>=4.0",
+license = { text = "BSD 3-Clause License" }
+authors = [
+    { email = "malinmayorc@janelia.hhmi.org", name = "Caroline Malin-Mayor" },
 ]
+keywords = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: BSD License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
+dependencies = ["platformdirs>=4.0,<5"]
 
 [project.scripts]
 janelia-paths-fetch = "janelia_pathlib._fetch:main"
 
-[tool.hatch.version]
-source = "vcs"
+[project.urls]
+homepage = "https://github.com/JaneliaSciComp/janelia_pathlib"
+repository = "https://github.com/JaneliaSciComp/janelia_pathlib"
 
-[tool.hatch.build.hooks.vcs]
-version-file = "src/janelia_pathlib/_version.py"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/janelia_pathlib"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
-[tool.ruff]
-target-version = "py311"
-
-[tool.mypy]
-python_version = "3.11"
-strict = true
-
+# https://peps.python.org/pep-0735/
 [dependency-groups]
+# Every dependency gets a lower *and* an upper bound; see CONTRIBUTING.md.
+test = ["pytest>=9.1,<10", "pytest-cov>=7.1,<8"]
 dev = [
-    "pytest>=9.0.3",
-    "mypy>=1.14",
-    "ruff>=0.9",
-    "pre-commit>=4.0",
+    { include-group = "test" },
+    "ipython>=9.16,<10",
+    "mypy>=2.3,<3",
+    "pre-commit>=4.6,<5",
+    "ruff>=0.16,<0.17",
 ]
+
+# enables dynamic versioning from git tags
+[tool.setuptools_scm]
+
+# https://docs.astral.sh/ruff/rules/
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+fix = true
+src = ["src"]
+
+[tool.ruff.lint]
+extend-select = [
+    "E",    # style errors
+    "W",    # style warnings
+    "F",    # flakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "C4",   # flake8-comprehensions
+    "B",    # flake8-bugbear
+    "A001", # flake8-builtins
+    "RUF",  # ruff-specific rules
+    "TID",  # tidy imports
+    "TC",   # type checking
+    "T201", # print statements
+    "D101", # undocumented public class
+    "D102", # undocumented public method
+    "D103", # undocumented public function
+    "D300", # enforces triple double quotes on docstrings
+    "D414", # empty/missing docstring section
+    "D417", # undocumented parameter
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["D"]
+# scripts are run directly and print their results, rather than being imported
+"scripts/**/*.py" = ["D", "T201"]
+".github/scripts/*.py" = ["D", "T201"]
+# janelia-paths-fetch is a console-entry-point CLI; its output is the point
+"src/janelia_pathlib/_fetch.py" = ["T201"]
+
+# https://docs.astral.sh/ruff/formatter/
+[tool.ruff.format]
+
+# https://docs.pytest.org/en/stable/reference/customize.html
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["tests"]
+filterwarnings = [
+    "error",
+    # if needed, add global ignores here, for example:
+    # "ignore:Some message:SomeCategory",
+]
+
+# https://mypy.readthedocs.io/en/stable/config_file.html
+[tool.mypy]
+files = "src/janelia_pathlib"
+strict = true
+disallow_any_generics = false
+disallow_subclassing_any = false
+show_error_codes = true
+pretty = true
+
+# https://coverage.readthedocs.io/en/latest/config.html
+# These exclusions are limited to code that provably cannot run under the test
+# suite. Deliberately *not* excluded: `except ImportError` (optional-dependency
+# fallbacks are exactly the paths that break for users without the extra) and
+# `pass` (which would also hide untested branches like `if edge_case: pass`).
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",           # explicit opt-out
+    "if TYPE_CHECKING:",          # never executes at runtime
+    "@overload",                  # typing-only stub signatures
+    "raise NotImplementedError()",# abstract methods; the bare form only
+    '^\s*\.\.\.\s*$',             # lines with ONLY ellipses, any surrounding whitespace
+]
+
+[tool.coverage.run]
+source = ["src/janelia_pathlib"]
