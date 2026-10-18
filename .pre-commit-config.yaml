@@ -5,6 +5,11 @@ ci:
   autofix_prs: false
 
 repos:
+  - repo: https://github.com/adhtruong/mirrors-typos
+    rev: v1.45.0
+    hooks:
+      - id: typos
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -31,4 +36,11 @@ repos:
     hooks:
       - id: mypy
         files: "^src/"
-        additional_dependencies: ["platformdirs>=4.0"]
+        # Pins the Python version mypy's own isolated hook environment is
+        # built with. Without this, pre-commit picks whatever Python it finds
+        # first, which can be older than this project supports and reject
+        # newer syntax (e.g. PEP 695 `type` statements) with a parse error
+        # rather than a type error.
+        language_version: "python3.11"
+        # add type stubs / runtime deps needed for type checking here
+        additional_dependencies: ["platformdirs>=4.0,<5"]

@@ -1,0 +1,30 @@
+version: 2
+
+updates:
+  # Python dependencies. Dependabot understands uv.lock, so these PRs bump the
+  # lock file and CI runs the full test matrix against the new versions.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for all bumps instead of one per package. Dependabot only moves
+      # versions within the constraints declared in pyproject.toml, so a
+      # dependency pinned as `foo>=1,<2` will not be offered a 2.x update at
+      # all; widening that bound is a manual edit.
+      python-dependencies:
+        patterns: ["*"]
+    commit-message:
+      prefix: "build(deps)"
+
+  # Keep the versions of the actions used in .github/workflows up to date.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci(deps)"

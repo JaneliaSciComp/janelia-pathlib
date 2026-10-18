@@ -1,0 +1,71 @@
+name: Outdated dependencies
+
+# Dependabot keeps uv.lock current, but only within the version constraints in
+# pyproject.toml: a dependency capped at `<3` will never be offered a 3.x
+# update. This job reports what is available beyond those bounds so that major
+# upgrades are a visible, deliberate decision instead of something you find out
+# about years later. It only reports — it never changes anything.
+
+on:
+  schedule:
+    # 07:00 UTC on the first of each month
+    - cron: "0 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # Reports only releases that the bounds in pyproject.toml forbid, so this
+      # never repeats what is already in an open Dependabot pull request.
+      - name: Check for bound-blocked releases
+        id: check
+        run: |
+          uv run --with packaging --no-project \
+            .github/scripts/report_outdated.py > outdated.txt
+          if [ -s outdated.txt ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat outdated.txt
+
+      - name: Open or update the tracking issue
+        if: steps.check.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="Dependency releases blocked by version bounds"
+          {
+            echo "These direct dependencies have newer releases that the version"
+            echo "bounds in \`pyproject.toml\` currently forbid:"
+            echo
+            cat outdated.txt
+            echo
+            echo "Dependabot cannot offer these, because they fall outside the"
+            echo "declared constraints. Taking one means widening the bound in"
+            echo "\`pyproject.toml\` by hand, running \`just upgrade\`, and making"
+            echo "whatever code changes the new version requires."
+            echo
+            echo "Anything **not** listed here that has an update available is"
+            echo "already covered by a Dependabot pull request."
+            echo
+            echo "_Updated by the \`outdated\` workflow; close it if these bounds are deliberate._"
+          } > body.md
+
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --body-file body.md
+          else
+            gh issue create --title "$TITLE" --body-file body.md
+          fi

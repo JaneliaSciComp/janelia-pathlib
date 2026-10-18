@@ -19,9 +19,7 @@ _SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 def _live_smb_mounts() -> list[tuple[str, str, str]]:
     """List live SMB mounts as ``(host, share_name, mountpoint)`` from `mount` output."""
     try:
-        output = subprocess.run(
-            ["mount"], capture_output=True, text=True, check=True
-        ).stdout
+        output = subprocess.run(["mount"], capture_output=True, text=True, check=True).stdout
     except (subprocess.CalledProcessError, OSError):
         return []
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ._macos import ensure_mounted
 from ._registry import current_os, resolve, resolve_janelia_url
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def from_janelia_uri(path_str: str, *, timeout: float = 30) -> str:

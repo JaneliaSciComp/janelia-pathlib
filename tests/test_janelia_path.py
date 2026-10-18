@@ -12,8 +12,7 @@ from urllib.error import URLError
 
 import pytest
 
-from janelia_pathlib import from_janelia_uri, to_janelia_uri
-from janelia_pathlib import _fetch, _registry
+from janelia_pathlib import _fetch, _registry, from_janelia_uri, to_janelia_uri
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="macOS paths")
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux paths")
@@ -55,16 +54,11 @@ def test_to_janelia_uri_from_windows_path():
 
 
 def test_to_janelia_uri_share_root_only():
-    assert (
-        to_janelia_uri("/labs/alpha/alphalab")
-        == "janelia://fileserver.example.org/alphalab"
-    )
+    assert to_janelia_uri("/labs/alpha/alphalab") == "janelia://fileserver.example.org/alphalab"
 
 
 def test_to_janelia_uri_no_match_passthrough():
-    assert (
-        to_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
-    )
+    assert to_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
 
 
 def test_to_janelia_uri_longest_prefix_wins():
@@ -76,10 +70,7 @@ def test_to_janelia_uri_longest_prefix_wins():
 
 
 def test_to_janelia_uri_trailing_slash():
-    assert (
-        to_janelia_uri("/labs/alpha/alphalab/")
-        == "janelia://fileserver.example.org/alphalab"
-    )
+    assert to_janelia_uri("/labs/alpha/alphalab/") == "janelia://fileserver.example.org/alphalab"
 
 
 @windows_only
@@ -104,10 +95,7 @@ def test_to_janelia_uri_resolves_colliding_mac_mount_via_live_state():
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"], returncode=0, stdout=mount_output
         )
-        assert (
-            to_janelia_uri("/Volumes/foxtrot/data")
-            == "janelia://nrs.example.org/foxtrot/data"
-        )
+        assert to_janelia_uri("/Volumes/foxtrot/data") == "janelia://nrs.example.org/foxtrot/data"
         assert (
             to_janelia_uri("/Volumes/foxtrot-1/data")
             == "janelia://nearline.example.org/foxtrot/data"
@@ -121,9 +109,7 @@ def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
     guessed from the static mac_path field -- a guess here could be wrong in
     exactly the same way the original mount-name collision bug was."""
     with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=["mount"], returncode=0, stdout=""
-        )
+        mock_run.return_value = subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="")
         assert to_janelia_uri("/Volumes/alphalab/data") == "/Volumes/alphalab/data"
 
 
@@ -131,9 +117,7 @@ def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
 
 
 def test_from_janelia_uri_no_match_passthrough():
-    assert (
-        from_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
-    )
+    assert from_janelia_uri("/tmp/local/scratch/file.txt") == "/tmp/local/scratch/file.txt"
 
 
 @linux_only
@@ -154,18 +138,14 @@ def test_from_janelia_uri_mounts_on_demand():
     """from_janelia_uri should trigger `open smb://...` when the share isn't
     mounted yet, then resolve the real mountpoint from live `mount` output."""
     with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
-        mount_output_empty = subprocess.CompletedProcess(
-            args=["mount"], returncode=0, stdout=""
-        )
+        mount_output_empty = subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="")
         mount_output_found = subprocess.CompletedProcess(
             args=["mount"],
             returncode=0,
             stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
         )
         mock_run.side_effect = [mount_output_empty, None, mount_output_found]
-        result = from_janelia_uri(
-            "janelia://fileserver.example.org/alphalab/data", timeout=2
-        )
+        result = from_janelia_uri("janelia://fileserver.example.org/alphalab/data", timeout=2)
         assert result == "/Volumes/alphalab/data"
         open_call = mock_run.call_args_list[1]
         args = open_call[0][0]
@@ -202,10 +182,7 @@ def test_from_janelia_uri_resolves_colliding_share_name():
                 "//user@nearline.example.org/foxtrot on /Volumes/foxtrot-1 (smbfs, nodev)"
             ),
         )
-        assert (
-            from_janelia_uri("janelia://nrs.example.org/foxtrot/data")
-            == "/Volumes/foxtrot/data"
-        )
+        assert from_janelia_uri("janelia://nrs.example.org/foxtrot/data") == "/Volumes/foxtrot/data"
         assert (
             from_janelia_uri("janelia://nearline.example.org/foxtrot/data")
             == "/Volumes/foxtrot-1/data"
@@ -276,9 +253,7 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
         with pytest.warns(UserWarning, match="No share data available"):
             assert _registry._load_shares() == {}
         # No known shares -> a real share path is left untranslated
-        assert (
-            to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
-        )
+        assert to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
     finally:
         _registry._load_shares.cache_clear()
 

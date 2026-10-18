@@ -1,0 +1,15 @@
+# Changes here will be overwritten by Copier; see https://copier.readthedocs.io/en/stable/configuring/#the-copier-answersyml-file
+_commit: v0.1.1
+_src_path: gh:JaneliaSciComp/janelia-cookiecutter
+copyright_holder: Howard Hughes Medical Institute, Janelia Research Campus
+email: malinmayorc@janelia.hhmi.org
+full_name: Caroline Malin-Mayor
+github_owner: JaneliaSciComp
+host_docs_on_github_io: false
+minimum_python_version: '3.11'
+project_name: janelia-pathlib
+project_short_description: Translate Janelia file share paths to/from an unambiguous
+    janelia:// URI
+project_slug: janelia_pathlib
+publish_to_pypi: true
+year: '2026'
