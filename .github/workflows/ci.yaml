@@ -57,7 +57,7 @@ jobs:
             resolution: highest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # setuptools-scm needs tags to determine the version
 
@@ -85,7 +85,7 @@ jobs:
       id-token: write # for trusted publishing to PyPI
       contents: write # for creating the GitHub release
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
