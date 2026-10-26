@@ -18,7 +18,20 @@ if TYPE_CHECKING:
 _SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 
 _ENV_MOUNT_TIMEOUT = "JANELIA_PATHLIB_MOUNT_TIMEOUT"
+_ENV_NO_MOUNT = "JANELIA_PATHLIB_NO_MOUNT"
 _DEFAULT_MOUNT_TIMEOUT = 30.0
+
+
+def no_mount() -> bool:
+    """Whether on-demand mounting is disabled via ``JANELIA_PATHLIB_NO_MOUNT``.
+
+    Mounting a share can block on a credential prompt, which is unwanted in
+    a headless or scripted context where nobody is there to answer. Whether
+    that's the case is a property of the machine, not of the calling code,
+    so it's an environment setting rather than an argument.
+    """
+    val = os.environ.get(_ENV_NO_MOUNT, "").strip().lower()
+    return val not in ("", "0", "false", "no")
 
 
 def default_mount_timeout() -> float:
@@ -113,7 +126,8 @@ def ensure_mounted(share_info: Share, *, timeout: float | None = None) -> Path |
     with the same name on different servers collide, and the second mounted
     gets suffixed (``/Volumes/<share>-1``).
 
-    ``timeout`` defaults to ``default_mount_timeout()``.
+    ``timeout`` defaults to ``default_mount_timeout()``. Returns None if the
+    share isn't mounted and ``JANELIA_PATHLIB_NO_MOUNT`` forbids mounting it.
     """
     if timeout is None:
         timeout = default_mount_timeout()
@@ -122,6 +136,9 @@ def ensure_mounted(share_info: Share, *, timeout: float | None = None) -> Path |
     found = find_live_mount(host, share_name)
     if found is not None:
         return Path(found)
+
+    if no_mount():
+        return None
 
     # `open` goes through the native SMB client so it can use Keychain
     # credentials or prompt for them; unlike `mount_smbfs` it returns as

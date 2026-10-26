@@ -85,7 +85,7 @@ to_janelia_uri("/tmp/local/scratch/file.txt")
 # "/tmp/local/scratch/file.txt"
 ```
 
-### `from_janelia_uri(path_str, *, timeout=30)`
+### `from_janelia_uri(path_str, *, timeout=None)`
 
 Translate a `janelia:/<linux_path>` string to a real, usable local path.
 
@@ -97,7 +97,7 @@ from_janelia_uri("janelia:/labs/alpha/alphalab/data")
 # "/labs/alpha/alphalab/data" (on Linux)
 ```
 
-On **macOS**, if the share isn't already mounted, this mounts it on demand (triggering the native SMB mount, which may prompt for credentials) and waits up to `timeout` seconds for the mount to appear, returning its *real* local mountpoint — not a guessed `/Volumes/<share>` path, which may not exist yet or may belong to a different, colliding share. Raises `RuntimeError` if the URI doesn't match a known share, or if mounting fails or times out.
+On **macOS**, if the share isn't already mounted, this mounts it on demand (triggering the native SMB mount, which may prompt for credentials) and waits up to `timeout` seconds for the mount to appear, returning its *real* local mountpoint — not a guessed `/Volumes/<share>` path, which may not exist yet or may belong to a different, colliding share. `timeout` defaults to `JANELIA_PATHLIB_MOUNT_TIMEOUT` (30s). Raises `RuntimeError` if the URI doesn't match a known share, or if mounting fails or times out.
 
 On **Linux** and **Windows**, no mounting step is needed — shares are already available at a fixed path (Linux) or accessible directly via UNC path (Windows).
 
@@ -109,6 +109,31 @@ from_janelia_uri("/tmp/local/scratch/file.txt")
 ```
 
 Both functions round-trip: `from_janelia_uri(to_janelia_uri(p))` resolves back to a valid local path for `p`'s share, and non-Janelia paths pass through both functions untouched.
+
+### `janelia_path(path_str)`
+
+An [`argparse`](https://docs.python.org/3/library/argparse.html) `type=` converter, for scripts that take a path on the command line:
+
+```python
+from janelia_pathlib import janelia_path
+
+parser.add_argument("--data", type=janelia_path)
+```
+
+```console
+$ my-script --data janelia:/labs/alpha/alphalab/data
+```
+
+The script receives `args.data` already converted to a local path, so it never has to care which OS it's on. Ordinary paths still work — anything that isn't a `janelia:` URI is passed through — so this is safe to add to an existing argument.
+
+Failures become normal argparse errors rather than tracebacks:
+
+```console
+$ my-script --data janelia:/labs/nope/data
+demo: error: argument --data: No known share for URI: janelia:/labs/nope/data
+```
+
+On macOS this mounts the share during `parse_args()`, which may block on a credential prompt. Set [`JANELIA_PATHLIB_NO_MOUNT`](#never-mounting) when nobody is there to answer.
 
 ## Share data
 
@@ -152,10 +177,28 @@ for long; override it with:
 export JANELIA_PATHLIB_FETCH_TIMEOUT=5
 ```
 
-On macOS, `from_janelia_uri` waits up to 30s for an on-demand mount to appear.
-That wait covers a native credential prompt, so it budgets for someone typing a
-password — raise it for a slow authenticator, or set it near zero in headless
-contexts where nobody is there to answer:
+### Never mounting
+
+On macOS, `from_janelia_uri` mounts a share that isn't mounted yet, which can
+block on a credential prompt. To forbid that — so an unmounted share raises
+instead — set:
+
+```bash
+export JANELIA_PATHLIB_NO_MOUNT=1
+```
+
+Already-mounted shares still resolve; this only stops new mounts. Use it in
+cron jobs, CI, containers, or anywhere nobody is there to answer a prompt.
+
+Whether a prompt can be answered is a property of the machine, not of the code
+calling it, which is why this is an environment setting rather than a function
+argument — the person running a script decides, not whoever wrote it.
+
+### Mount timeout
+
+When mounting *is* allowed, `from_janelia_uri` waits up to 30s for the mount to
+appear. That wait covers a credential prompt, so it budgets for someone typing
+a password — raise it for a slow authenticator:
 
 ```bash
 export JANELIA_PATHLIB_MOUNT_TIMEOUT=90

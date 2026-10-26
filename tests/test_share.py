@@ -76,6 +76,24 @@ def test_default_mount_timeout_ignores_garbage(monkeypatch):
     assert _macos.default_mount_timeout() == 30.0
 
 
+@pytest.mark.parametrize("value", ["1", "true", "yes", "anything"])
+def test_no_mount_is_set(monkeypatch, value):
+    monkeypatch.setenv("JANELIA_PATHLIB_NO_MOUNT", value)
+    assert _macos.no_mount() is True
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "  FALSE  "])
+def test_no_mount_is_unset(monkeypatch, value):
+    """Same falsey spellings JANELIA_PATHLIB_NO_FETCH accepts."""
+    monkeypatch.setenv("JANELIA_PATHLIB_NO_MOUNT", value)
+    assert _macos.no_mount() is False
+
+
+def test_no_mount_defaults_to_false(monkeypatch):
+    monkeypatch.delenv("JANELIA_PATHLIB_NO_MOUNT", raising=False)
+    assert _macos.no_mount() is False
+
+
 @mac_only
 def test_ensure_mounted_honors_env_timeout(monkeypatch):
     """With a zero timeout, a share that never appears gives up immediately

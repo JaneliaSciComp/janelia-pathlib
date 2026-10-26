@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ._macos import ensure_mounted
+from ._macos import ensure_mounted, no_mount
 from ._match import find_share_for_janelia_uri, find_share_for_path
 from ._share import current_os
 
@@ -24,6 +24,9 @@ def from_janelia_uri(path_str: str, *, timeout: float | None = None) -> str:
     Windows need no mounting step -- shares are already at a fixed path or
     reachable directly by UNC path.
 
+    Set ``JANELIA_PATHLIB_NO_MOUNT`` to never mount: an unmounted share
+    raises instead. Useful where no one is there to answer a prompt.
+
     Args:
         path_str: A ``janelia:/<linux_path>`` URI. Any other string is
             returned unchanged, so this is safe to call on paths that may
@@ -37,8 +40,9 @@ def from_janelia_uri(path_str: str, *, timeout: float | None = None) -> str:
         ``janelia:`` URI.
 
     Raises:
-        RuntimeError: if the URI names no known share, or if a macOS mount
-            fails or times out.
+        RuntimeError: if the URI names no known share, if a macOS mount
+            fails or times out, or if the share isn't mounted and
+            ``JANELIA_PATHLIB_NO_MOUNT`` forbids mounting it.
     """
     if not path_str.strip().startswith("janelia:"):
         return path_str
@@ -53,6 +57,11 @@ def from_janelia_uri(path_str: str, *, timeout: float | None = None) -> str:
     if os_name == "mac":
         mount_point = ensure_mounted(share_info, timeout=timeout)
         if mount_point is None:
+            if no_mount():
+                raise RuntimeError(
+                    f"Share {share_info.share_name!r} isn't mounted and "
+                    f"JANELIA_PATHLIB_NO_MOUNT is set, so it can't be mounted."
+                )
             raise RuntimeError(f"Failed to mount share: {share_info.zone}")
         base = str(mount_point)
     elif os_name == "linux":
