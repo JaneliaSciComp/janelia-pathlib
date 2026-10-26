@@ -153,6 +153,37 @@ def test_to_janelia_uri_resolves_colliding_mac_mount_via_live_state():
 
 
 @mac_only
+def test_to_janelia_uri_warns_when_known_share_is_unmounted():
+    """An unmounted share passes through untranslated, which otherwise looks
+    identical to a path that was never a share -- so say which it was."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="")
+        with pytest.warns(UserWarning, match="isn't mounted"):
+            assert to_janelia_uri("/Volumes/alphalab/data") == "/Volumes/alphalab/data"
+
+
+@mac_only
+def test_to_janelia_uri_warns_for_suffixed_collision_mountpoint():
+    """macOS suffixes a colliding mountpoint, so /Volumes/foxtrot-1 should
+    still be recognized as share `foxtrot`."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="")
+        with pytest.warns(UserWarning, match="foxtrot"):
+            to_janelia_uri("/Volumes/foxtrot-1/data")
+
+
+@mac_only
+def test_to_janelia_uri_quiet_for_non_janelia_volume():
+    """A USB stick or disk image isn't ours -- no warning for /Volumes names
+    that match no known share."""
+    with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert to_janelia_uri("/Volumes/MyBackupDrive/x") == "/Volumes/MyBackupDrive/x"
+
+
+@mac_only
 def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
     """If live `mount` output has nothing at this mountpoint (e.g. not actually
     mounted, or `mount` unavailable), the path is left unresolved rather than
@@ -160,7 +191,8 @@ def test_to_janelia_uri_mac_mount_not_live_passes_through_unchanged():
     exactly the same way the original mount-name collision bug was."""
     with patch("janelia_pathlib._macos.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(args=["mount"], returncode=0, stdout="")
-        assert to_janelia_uri("/Volumes/alphalab/data") == "/Volumes/alphalab/data"
+        with pytest.warns(UserWarning, match="isn't mounted"):
+            assert to_janelia_uri("/Volumes/alphalab/data") == "/Volumes/alphalab/data"
 
 
 # --- from_janelia_uri() tests ---
@@ -333,7 +365,8 @@ def test_find_share_for_windows_drive_unmapped_returns_none():
         [{"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:"}]
     )
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        assert _windows.find_share_for_windows_drive("Q:", _share.load_shares()) is None
+        with pytest.warns(UserWarning, match="not a mapped network drive"):
+            assert _windows.find_share_for_windows_drive("Q:", _share.load_shares()) is None
 
 
 def test_find_share_for_windows_drive_ignores_non_drive_paths():
@@ -352,10 +385,13 @@ def test_find_share_for_windows_drive_ignores_non_drive_paths():
 
 
 def test_find_share_for_windows_drive_unknown_share_returns_none():
-    """A drive mapped to a share we don't know about isn't ours to translate."""
+    """A drive mapped to a share we don't know about isn't ours to translate --
+    and unlike an unmapped letter, nothing is wrong, so it shouldn't warn."""
     mapping = json.dumps([{"RemotePath": "\\\\other.example.org\\nope", "LocalPath": "Z:"}])
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        assert _windows.find_share_for_windows_drive("Z:", _share.load_shares()) is None
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert _windows.find_share_for_windows_drive("Z:", _share.load_shares()) is None
 
 
 @pytest.mark.parametrize("stdout", ["", "   ", "not json at all"])

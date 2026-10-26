@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import time
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -86,6 +87,20 @@ def find_share_for_mac_path(path_str: str, shares: Iterable[Share]) -> tuple[Sha
             share = find_share_by_host_and_name(mount_host, mount_share, shares)
             if share is not None:
                 return share, normalized[len(mountpoint) :].lstrip("/")
+
+    # Not mounted, so it passes through untranslated -- indistinguishable to
+    # the caller from a path that was never a share. If the mountpoint name
+    # matches a known share, say so. macOS suffixes a colliding mountpoint
+    # (/Volumes/foo-1), so match the stem too.
+    mount_name = parts[2]
+    stem = re.sub(r"-\d+$", "", mount_name)
+    if any(share.share_name in (mount_name, stem) for share in shares):
+        warnings.warn(
+            f"{path_str!r} looks like Janelia share {stem!r}, but it isn't mounted "
+            f"here, so it can't be translated. Mount it, or use from_janelia_uri() "
+            f"to mount it on demand.",
+            stacklevel=3,
+        )
     return None
 
 
