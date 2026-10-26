@@ -8,10 +8,12 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._share import find_share_by_host_and_name
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from ._registry import Share
+    from ._share import Share
 
 _SMB_MOUNT_LINE = re.compile(r"^//(?:[^@]+@)?([^/]+)/(.+?) on (\S+) \(smbfs")
 
@@ -55,8 +57,6 @@ def find_share_for_mac_mountpoint(mountpoint: str, shares: Iterable[Share]) -> S
     second one actually landing at ``/Volumes/<name>-1``) by checking which
     share's SMB host+name is actually mounted there right now.
     """
-    from ._registry import find_share_by_host_and_name
-
     for mount_host, mount_share, live_point in _live_smb_mounts():
         if live_point == mountpoint:
             share = find_share_by_host_and_name(mount_host, mount_share, shares)

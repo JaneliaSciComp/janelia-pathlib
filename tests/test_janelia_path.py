@@ -12,7 +12,7 @@ from urllib.error import URLError
 
 import pytest
 
-from janelia_pathlib import _fetch, _registry, _windows, from_janelia_uri, to_janelia_uri
+from janelia_pathlib import _fetch, _share, _windows, from_janelia_uri, to_janelia_uri
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="macOS paths")
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux paths")
@@ -241,7 +241,7 @@ def test_find_share_for_windows_drive_matches_mapping():
         [{"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:"}]
     )
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        share = _windows.find_share_for_windows_drive("Z:", _registry._load_shares())
+        share = _windows.find_share_for_windows_drive("Z:", _share.load_shares())
         assert share is not None
         assert share.linux_path == "/labs/alpha/alphalab"
 
@@ -253,7 +253,7 @@ def test_find_share_for_windows_drive_is_case_insensitive():
         [{"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:\\"}]
     )
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        share = _windows.find_share_for_windows_drive("z:", _registry._load_shares())
+        share = _windows.find_share_for_windows_drive("z:", _share.load_shares())
         assert share is not None
         assert share.linux_path == "/labs/alpha/alphalab"
 
@@ -268,7 +268,7 @@ def test_find_share_for_windows_drive_resolves_colliding_share_names():
         ]
     )
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        shares = _registry._load_shares()
+        shares = _share.load_shares()
         assert _windows.find_share_for_windows_drive("X:", shares).linux_path == "/nrs/foxtrot"
         assert _windows.find_share_for_windows_drive("Y:", shares).linux_path == "/nearline/foxtrot"
 
@@ -277,7 +277,7 @@ def test_find_share_for_windows_drive_single_mapping_is_json_object():
     """ConvertTo-Json emits a bare object, not a list, for a single mapping."""
     mapping = json.dumps({"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:"})
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        share = _windows.find_share_for_windows_drive("Z:", _registry._load_shares())
+        share = _windows.find_share_for_windows_drive("Z:", _share.load_shares())
         assert share is not None
         assert share.linux_path == "/labs/alpha/alphalab"
 
@@ -287,14 +287,14 @@ def test_find_share_for_windows_drive_unmapped_returns_none():
         [{"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:"}]
     )
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        assert _windows.find_share_for_windows_drive("Q:", _registry._load_shares()) is None
+        assert _windows.find_share_for_windows_drive("Q:", _share.load_shares()) is None
 
 
 def test_find_share_for_windows_drive_unknown_share_returns_none():
     """A drive mapped to a share we don't know about isn't ours to translate."""
     mapping = json.dumps([{"RemotePath": "\\\\other.example.org\\nope", "LocalPath": "Z:"}])
     with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
-        assert _windows.find_share_for_windows_drive("Z:", _registry._load_shares()) is None
+        assert _windows.find_share_for_windows_drive("Z:", _share.load_shares()) is None
 
 
 @pytest.mark.parametrize("stdout", ["", "   ", "not json at all"])
@@ -360,14 +360,14 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
 
     monkeypatch.setenv("JANELIA_PATHLIB_NO_FETCH", "1")
     monkeypatch.setenv("JANELIA_PATHLIB_SHARES_PATH", str(tmp_path / "missing.json"))
-    _registry._load_shares.cache_clear()
+    _share.load_shares.cache_clear()
     try:
         with pytest.warns(UserWarning, match="No share data available"):
-            assert _registry._load_shares() == ()
+            assert _share.load_shares() == ()
         # No known shares -> a real share path is left untranslated
         assert to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
     finally:
-        _registry._load_shares.cache_clear()
+        _share.load_shares.cache_clear()
 
 
 def test_missing_cache_degrades_without_no_fetch(monkeypatch, tmp_path):
@@ -382,12 +382,12 @@ def test_missing_cache_degrades_without_no_fetch(monkeypatch, tmp_path):
         raise URLError("offline")
 
     monkeypatch.setattr("urllib.request.urlopen", boom)
-    _registry._load_shares.cache_clear()
+    _share.load_shares.cache_clear()
     try:
         with pytest.warns(UserWarning, match="No share data available"):
-            assert _registry._load_shares() == ()
+            assert _share.load_shares() == ()
     finally:
-        _registry._load_shares.cache_clear()
+        _share.load_shares.cache_clear()
 
 
 def test_load_shares_refetches_every_call(monkeypatch, tmp_path):
@@ -403,17 +403,17 @@ def test_load_shares_refetches_every_call(monkeypatch, tmp_path):
         call_count["n"] += 1
         path.write_text("[]")
 
-    monkeypatch.setattr(_registry, "fetch_shares", fake_fetch_shares)
-    _registry._load_shares.cache_clear()
+    monkeypatch.setattr(_share, "fetch_shares", fake_fetch_shares)
+    _share.load_shares.cache_clear()
     try:
-        _registry._load_shares.cache_clear()
-        _registry._load_shares()
+        _share.load_shares.cache_clear()
+        _share.load_shares()
         assert call_count["n"] == 1
-        _registry._load_shares.cache_clear()
-        _registry._load_shares()
+        _share.load_shares.cache_clear()
+        _share.load_shares()
         assert call_count["n"] == 2
     finally:
-        _registry._load_shares.cache_clear()
+        _share.load_shares.cache_clear()
 
 
 def test_fetch_failure_falls_back_to_stale_cache(monkeypatch, tmp_path):
@@ -439,11 +439,11 @@ def test_fetch_failure_falls_back_to_stale_cache(monkeypatch, tmp_path):
         raise URLError("offline")
 
     monkeypatch.setattr("urllib.request.urlopen", boom)
-    _registry._load_shares.cache_clear()
+    _share.load_shares.cache_clear()
     try:
         with pytest.warns(UserWarning, match="stale"):
-            shares = _registry._load_shares()
+            shares = _share.load_shares()
         assert len(shares) == 1
         assert shares[0].zone == "Alpha"
     finally:
-        _registry._load_shares.cache_clear()
+        _share.load_shares.cache_clear()

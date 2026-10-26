@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ._macos import ensure_mounted
-from ._registry import current_os, resolve, resolve_janelia_uri
+from ._match import resolve, resolve_janelia_uri
+from ._share import current_os
 
 if TYPE_CHECKING:
     from pathlib import Path

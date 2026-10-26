@@ -3,7 +3,7 @@
 The fetched shares.json is stored in the per-user cache directory so it
 never lives in the source tree (which would leak internal Janelia paths
 to a public repo). Invoked automatically on every use unless
-JANELIA_PATHLIB_NO_FETCH is set (see ``_registry._load_shares``), and
+JANELIA_PATHLIB_NO_FETCH is set (see ``_share.load_shares``), and
 manually via the ``janelia-paths-fetch`` CLI.
 """
 

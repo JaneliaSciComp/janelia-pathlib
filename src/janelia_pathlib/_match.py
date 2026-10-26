@@ -1,92 +1,28 @@
-"""Share registry: loads share data and provides path translation."""
+"""Matching path strings against known shares.
+
+Which matcher applies depends on how self-describing the path format is.
+A Linux path, a UNC path, and an ``smb://`` URL each identify a share on
+their own, so they resolve anywhere. A ``/Volumes/<name>`` mountpoint or a
+Windows drive letter don't -- only the live mount table on that machine
+says which share they point at.
+"""
 
 from __future__ import annotations
 
-import json
-import platform
 import re
-import warnings
-from dataclasses import dataclass
-from functools import cache
 from typing import TYPE_CHECKING
-from urllib.error import URLError
 
 from . import _macos, _windows
-from ._fetch import fetch_shares, no_fetch, resolve_cache_path
+from ._share import current_os, find_share_by_host_and_name, load_shares, parse_smb_url
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
-_OS_MAP = {"Darwin": "mac", "Linux": "linux", "Windows": "windows"}
-
-_SMB_URL_RE = re.compile(r"smb://([^/]+)/(.+)")
+    from ._share import Share
 
 
-def parse_smb_url(url: str) -> tuple[str, str] | None:
-    """Split an ``smb://host/share/...`` URL into ``(host, rest)``.
-
-    Returns None if ``url`` isn't a well-formed ``smb://`` URL.
-    """
-    match = _SMB_URL_RE.match(url.strip().rstrip("/"))
-    if match is None:
-        return None
-    return match.group(1), match.group(2)
-
-
-@dataclass(frozen=True, slots=True)
-class Share:
-    """A single file share entry, matching the Fileglancer API's own field names.
-
-    ``host`` and ``share_name`` are parsed from ``mac_path`` once at load
-    (see ``from_api_entry``) rather than on each lookup. Live mount tables
-    on macOS and Windows identify a share by that pair.
-    """
-
-    zone: str
-    linux_path: str
-    windows_path: str
-    mac_path: str
-    host: str
-    share_name: str
-
-    @classmethod
-    def from_api_entry(cls, entry: Mapping[str, str]) -> Share:
-        """Build a Share from one Fileglancer API record.
-
-        Raises:
-            ValueError: if ``mac_path`` isn't a well-formed ``smb://`` URL.
-        """
-        mac_path = entry["mac_path"]
-        parsed = parse_smb_url(mac_path)
-        if parsed is None:
-            raise ValueError(f"Malformed smb path for mac mounting: {mac_path}")
-        host, share_name = parsed
-        return cls(
-            zone=entry["zone"],
-            linux_path=entry["linux_path"],
-            windows_path=entry["windows_path"],
-            mac_path=mac_path,
-            host=host,
-            share_name=share_name,
-        )
-
-    @property
-    def uri(self) -> str:
-        """The share's canonical ``janelia:/<linux_path>`` identity."""
-        return f"janelia:{self.linux_path}"
-
-
-def find_share_by_host_and_name(
-    host: str, share_name: str, shares: Iterable[Share]
-) -> Share | None:
-    """Find the share served as ``share_name`` by ``host``.
-
-    This is how live mount tables identify a share on macOS and Windows.
-    """
-    for share in shares:
-        if (share.host, share.share_name) == (host, share_name):
-            return share
-    return None
+def _to_forward_slash(path: str) -> str:
+    return path.replace("\\", "/")
 
 
 def _find_share_by_fixed_path(
@@ -205,57 +141,6 @@ def find_share_for_mounted_path(
     return None
 
 
-@cache
-def _load_shares() -> tuple[Share, ...]:
-    """Load share data, refreshing it from the network on every call unless
-    JANELIA_PATHLIB_NO_FETCH is set.
-
-    JANELIA_PATHLIB_NO_FETCH means "never touch the network": use the cache
-    file as-is if present (however stale). Without it, a fetch failure
-    (offline, DNS, etc.) falls back to the existing cache file instead.
-    Either way, if there's no cache file to fall back to, this degrades to
-    no known shares (with a warning) rather than raising -- paths just pass
-    through untranslated instead of breaking the caller.
-    """
-    cache_file = resolve_cache_path()
-
-    if not no_fetch():
-        try:
-            fetch_shares(cache_file)
-        except (URLError, OSError) as e:
-            if cache_file.is_file():
-                warnings.warn(
-                    f"Failed to refresh share data ({e}); using cached data "
-                    f"at {cache_file}, which may be stale.",
-                    stacklevel=2,
-                )
-
-    if not cache_file.is_file():
-        warnings.warn(
-            f"No share data available at {cache_file}; paths will not be "
-            "translated. Run `janelia-paths-fetch` from a machine with "
-            "access to the Janelia network to populate the cache.",
-            stacklevel=2,
-        )
-        return ()
-
-    data_text = cache_file.read_text()
-    raw = json.loads(data_text)
-    return tuple(Share.from_api_entry(entry) for entry in raw)
-
-
-def _to_forward_slash(path: str) -> str:
-    return path.replace("\\", "/")
-
-
-def current_os() -> str:
-    """Return the current OS as 'linux', 'mac', or 'windows'."""
-    os_name = _OS_MAP.get(platform.system())
-    if os_name is None:
-        raise RuntimeError(f"Unsupported platform: {platform.system()}")
-    return os_name
-
-
 def resolve_janelia_uri(
     path_str: str, shares: Iterable[Share] | None = None
 ) -> tuple[Share, str] | None:
@@ -267,7 +152,7 @@ def resolve_janelia_uri(
     first path segment parse as a URI authority.
     """
     if shares is None:
-        shares = _load_shares()
+        shares = load_shares()
 
     match = re.match(r"janelia:(/(?!/).*)$", path_str.strip())
     if match is None:
@@ -287,9 +172,9 @@ def resolve(path_str: str, shares: Iterable[Share] | None = None) -> tuple[Share
     can't: a bare ``/Volumes/<name>`` Mac path can't be told apart from a
     static string alone when two shares collide on the same mount name
     (macOS names mountpoints after the share name alone, ignoring the
-    host), and a Windows drive letter isn't in the registry at all -- only
-    live state can map it to a share. On Linux this is just the static
-    ``linux_path`` match, already fully authoritative.
+    host), and a Windows drive letter isn't in the share data at all --
+    only live state can map it to a share. On Linux this is just the
+    static ``linux_path`` match, already fully authoritative.
 
     Then falls back to the forms that are self-describing enough to match
     on any OS, no live state needed: a ``linux_path`` prefix (fixed and
@@ -299,7 +184,7 @@ def resolve(path_str: str, shares: Iterable[Share] | None = None) -> tuple[Share
     table, which only exists on the machine holding the mount.
     """
     if shares is None:
-        shares = _load_shares()
+        shares = load_shares()
 
     live_result = find_share_for_mounted_path(path_str, current_os(), shares)
     if live_result is not None:
