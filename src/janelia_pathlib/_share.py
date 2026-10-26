@@ -6,6 +6,7 @@ import re
 import warnings
 from dataclasses import dataclass
 from functools import cache
+from itertools import pairwise
 from typing import TYPE_CHECKING
 from urllib.error import URLError
 
@@ -14,16 +15,15 @@ from ._fetch import fetch_shares, no_fetch, resolve_cache_path
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
-_OS_MAP = {"Darwin": "mac", "Linux": "linux", "Windows": "windows"}
-
 _SMB_URL_RE = re.compile(r"smb://([^/]+)/(.+)")
 
 
 def current_os() -> str:
     """Return the current OS as 'linux', 'mac', or 'windows'."""
-    os_name = _OS_MAP.get(platform.system())
+    system = platform.system()
+    os_name = {"Darwin": "mac", "Linux": "linux", "Windows": "windows"}.get(system)
     if os_name is None:
-        raise RuntimeError(f"Unsupported platform: {platform.system()}")
+        raise RuntimeError(f"Unsupported platform: {system}")
     return os_name
 
 
@@ -81,6 +81,28 @@ class Share:
         return f"janelia:{self.linux_path}"
 
 
+def _warn_if_nested(shares: tuple[Share, ...], attr: str, sep: str) -> None:
+    """Warn if any share's ``attr`` path sits inside another share's.
+
+    Matching takes the first share whose path prefixes the input, which is
+    only unambiguous while no share nests under another. That holds across
+    all live Fileglancer data (a share mounted inside another share's mount
+    would be odd to administer), but it's an assumption about data we don't
+    control, so check rather than trust.
+
+    Sorting puts any nested path directly after the one containing it, so
+    comparing neighbours is enough -- no quadratic scan over every pair.
+    """
+    paths = sorted({getattr(share, attr) for share in shares if getattr(share, attr)})
+    for outer, inner in pairwise(paths):
+        if inner.startswith(outer.rstrip(sep) + sep):
+            warnings.warn(
+                f"Share {inner!r} is nested inside {outer!r}; paths under it may "
+                f"resolve to the wrong share.",
+                stacklevel=2,
+            )
+
+
 def find_share_by_host_and_name(
     host: str, share_name: str, shares: Iterable[Share]
 ) -> Share | None:
@@ -130,4 +152,8 @@ def load_shares() -> tuple[Share, ...]:
 
     data_text = cache_file.read_text()
     raw = json.loads(data_text)
-    return tuple(Share.from_api_entry(entry) for entry in raw)
+    shares = tuple(Share.from_api_entry(entry) for entry in raw)
+
+    _warn_if_nested(shares, "linux_path", "/")
+    _warn_if_nested(shares, "windows_path", "\\")
+    return shares

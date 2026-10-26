@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from ._share import Share
 
-DRIVE_RE = re.compile(r"^([A-Za-z]:)(\\.*)?$")
+_DRIVE_RE = re.compile(r"^([A-Za-z]:)(\\.*)?$")
 
 
 def _live_windows_drives() -> list[tuple[str, str, str]]:
@@ -58,12 +58,26 @@ def _live_windows_drives() -> list[tuple[str, str, str]]:
     return drives
 
 
-def find_share_for_windows_drive(drive: str, shares: Iterable[Share]) -> Share | None:
-    """Find which of ``shares`` is actually mapped to Windows drive letter ``drive``."""
-    drive_norm = drive.rstrip("\\").upper()
+def find_share_for_windows_drive(
+    path_str: str, shares: Iterable[Share]
+) -> tuple[Share, str] | None:
+    """Find which of ``shares`` a mapped drive path (``X:\\...``) points at.
+
+    A drive letter is an arbitrary per-user mapping that says nothing about
+    the share on its own, so this checks which share is actually mapped to
+    it right now.
+
+    Returns (share, subpath), or None if the path isn't a mapped drive.
+    """
+    match = _DRIVE_RE.match(path_str.strip())
+    if match is None:
+        return None
+    drive_norm = match.group(1).rstrip("\\").upper()
+    subpath = (match.group(2) or "").replace("\\", "/").strip("/")
+
     for mount_host, mount_share, local in _live_windows_drives():
         if local.rstrip("\\").upper() == drive_norm:
             share = find_share_by_host_and_name(mount_host, mount_share, shares)
             if share is not None:
-                return share
+                return share, subpath
     return None

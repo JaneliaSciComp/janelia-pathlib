@@ -152,6 +152,17 @@ for long; override it with:
 export JANELIA_PATHLIB_FETCH_TIMEOUT=5
 ```
 
+On macOS, `from_janelia_uri` waits up to 30s for an on-demand mount to appear.
+That wait covers a native credential prompt, so it budgets for someone typing a
+password — raise it for a slow authenticator, or set it near zero in headless
+contexts where nobody is there to answer:
+
+```bash
+export JANELIA_PATHLIB_MOUNT_TIMEOUT=90
+```
+
+Passing `timeout=` to `from_janelia_uri` overrides it per call.
+
 ## Development
 
 This project uses [uv](https://docs.astral.sh/uv/) and
