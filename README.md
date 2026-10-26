@@ -4,9 +4,9 @@
 [![codecov](https://codecov.io/gh/JaneliaSciComp/janelia_pathlib/branch/main/graph/badge.svg)](https://codecov.io/gh/JaneliaSciComp/janelia_pathlib)
 [![PyPI](https://img.shields.io/pypi/v/janelia-pathlib.svg)](https://pypi.org/project/janelia-pathlib)
 
-Translate Janelia file share paths to and from an unambiguous `janelia://` URI, so code can refer to a share without depending on OS-specific mount guesses.
+Translate Janelia file share paths to and from an unambiguous `janelia:` URI, so code can refer to a share without depending on OS-specific mount guesses.
 
-Janelia file shares are mounted at different paths on Linux, Mac, and Windows, and on macOS two different shares can even collide on the same guessed mount point (e.g. `/Volumes/<name>`). This package gives you two functions to move between a local path and a stable, host-qualified identity that's never ambiguous.
+Janelia file shares are mounted at different paths on Linux, Mac, and Windows, and on macOS two different shares can even collide on the same guessed mount point (e.g. `/Volumes/<name>`). This package gives you two functions to move between a local path and a stable identity that's never ambiguous.
 
 ## Installation
 
@@ -27,42 +27,56 @@ Requires Python 3.11+. Zero runtime dependencies beyond `platformdirs`.
 ```python
 from janelia_pathlib import to_janelia_uri, from_janelia_uri
 
-# Canonicalize a local path to its unambiguous janelia:// identity
+# Canonicalize a local path to its unambiguous janelia: identity
 uri = to_janelia_uri("/labs/alpha/alphalab/sub/data")
-# "janelia://fileserver.example.org/alphalab/sub/data"
+# "janelia:/labs/alpha/alphalab/sub/data"
 
-# Resolve a janelia:// URI back to a real, usable local path
+# Resolve a janelia: URI back to a real, usable local path
 path = from_janelia_uri(uri)
 # "/Volumes/alphalab/sub/data" (on Mac), "/labs/alpha/alphalab/sub/data" (on Linux), ...
 ```
 
-## Why `janelia://`?
+## Why `janelia:`?
 
 A share's local mount point differs by OS, and on macOS it isn't even guaranteed to be unique: two shares with the same share name on different servers (e.g. `host-a.example.org/data` and `host-b.example.org/data`) both nominally want `/Volumes/data` — macOS mounts the second at `/Volumes/data-1` instead. A bare path string like `/Volumes/data` can't tell you which share that actually is.
 
-`janelia://host/share/subpath` encodes the SMB host and share name directly, which is always unique — so it's safe to store, log, or pass between machines, and always resolves back to the *correct* share regardless of what macOS happened to name the mountpoint.
+`janelia:/<linux_path>` uses the share's Linux path as its identity. Linux mount points are fixed and admin-assigned, so they're unique and stable — unlike a macOS mountpoint name or a Windows drive letter, and unlike the SMB host, which changes if a share migrates to new hardware. The URI is safe to store, log, or pass between machines, and always resolves back to the *correct* share.
+
+### Why one slash, not two?
+
+`//` in a URI opens an [authority component](https://datatracker.ietf.org/doc/html/rfc3986#section-3.2) — the `host` in `https://host/path`. A Linux path has nothing to put there: a share's identity spans a variable number of leading segments (`/labs/alpha/home`, `/nrs/foxtrot`) and is only recoverable by prefix-matching the share table, so there's no fixed cut point. `janelia://labs/alpha/...` would silently parse `labs` — a storage tier — as the authority. The single-slash form says there is no authority, the same way `mailto:` and `urn:` do.
 
 ## API
 
 ### `to_janelia_uri(path)`
 
-Translate a local path in the **current OS's own format** to its canonical `janelia://host/share/subpath` form. A path in a different OS's format (e.g. a Windows UNC path passed in while running on Linux) is not recognized — only `janelia://` URIs are portable across OSes; a plain path is assumed to describe the machine it's running on.
+Translate a path to its canonical `janelia:/<linux_path>` form.
+
+Three input formats are **self-describing** and resolve on any OS, regardless of the machine you're running on:
+
+| Format | Example |
+|---|---|
+| Linux path | `/labs/alpha/alphalab/data` |
+| Windows UNC | `\\fileserver.example.org\alphalab\data` |
+| SMB URL | `smb://fileserver.example.org/alphalab/data` |
 
 ```python
 from janelia_pathlib import to_janelia_uri
 
-# On Linux:
+# All three produce the same identity, on any OS:
 to_janelia_uri("/labs/alpha/alphalab/data")
-# "janelia://fileserver.example.org/alphalab/data"
-
-# On Mac, once the share is mounted:
-to_janelia_uri("/Volumes/alphalab/data")
-# "janelia://fileserver.example.org/alphalab/data"
+to_janelia_uri("smb://fileserver.example.org/alphalab/data")
+# "janelia:/labs/alpha/alphalab/data"
 ```
 
-**On macOS**, resolving a `/Volumes/...` path requires the share to be mounted already — `mac_path` alone can't be trusted as a guess (two shares can collide on the same mount name; see "Why `janelia://`?" above), so this checks live `mount` state rather than guessing. If the share isn't mounted, the path isn't recognized and passes through unchanged. Use `from_janelia_uri` first if you need to mount it.
+Two formats are **inherently OS-local** and only resolve while running on that OS, with the share mounted:
 
-**Linux** paths always resolve without any live check, since Linux mount points are fixed and never ambiguous.
+| Format | Example | Why |
+|---|---|---|
+| macOS mountpoint | `/Volumes/alphalab/data` | The name is assigned from the share name alone, so two shares can collide (`/Volumes/data` vs `/Volumes/data-1`). Only the live `mount` table says which is which. |
+| Windows drive letter | `Z:\data` | Per-user mapping state; the letter carries no information about the share. |
+
+For these, the live mount table is consulted rather than guessing from `mac_path`/`windows_path` — a guess could be wrong in exactly the way the mount-name collision causes. If the share isn't mounted, the path passes through unchanged; use `from_janelia_uri` first if you need to mount it.
 
 Paths that don't match any known share are returned unchanged:
 
@@ -73,12 +87,12 @@ to_janelia_uri("/tmp/local/scratch/file.txt")
 
 ### `from_janelia_uri(path_str, *, timeout=30)`
 
-Translate a `janelia://host/share/subpath` string to a real, usable local path.
+Translate a `janelia:/<linux_path>` string to a real, usable local path.
 
 ```python
 from janelia_pathlib import from_janelia_uri
 
-from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
+from_janelia_uri("janelia:/labs/alpha/alphalab/data")
 # "/Volumes/alphalab/data" (on Mac)
 # "/labs/alpha/alphalab/data" (on Linux)
 ```
@@ -87,7 +101,7 @@ On **macOS**, if the share isn't already mounted, this mounts it on demand (trig
 
 On **Linux** and **Windows**, no mounting step is needed — shares are already available at a fixed path (Linux) or accessible directly via UNC path (Windows).
 
-A string that isn't a `janelia://` URI is returned unchanged:
+A string that isn't a `janelia:` URI is returned unchanged:
 
 ```python
 from_janelia_uri("/tmp/local/scratch/file.txt")

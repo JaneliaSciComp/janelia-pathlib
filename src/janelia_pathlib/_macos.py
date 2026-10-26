@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable
 
     from ._registry import Share
 
@@ -46,9 +46,7 @@ def find_live_mount(host: str, share_name: str) -> str | None:
     return None
 
 
-def find_share_for_mac_mountpoint(
-    mountpoint: str, shares: Mapping[tuple[str, str], Share]
-) -> Share | None:
+def find_share_for_mac_mountpoint(mountpoint: str, shares: Iterable[Share]) -> Share | None:
     """Find which of ``shares`` is actually live-mounted at ``mountpoint``.
 
     Disambiguates a bare ``/Volumes/<name>`` path when multiple shares would
@@ -57,9 +55,11 @@ def find_share_for_mac_mountpoint(
     second one actually landing at ``/Volumes/<name>-1``) by checking which
     share's SMB host+name is actually mounted there right now.
     """
+    from ._registry import find_share_by_host_and_name
+
     for mount_host, mount_share, live_point in _live_smb_mounts():
         if live_point == mountpoint:
-            share = shares.get((mount_host, mount_share))
+            share = find_share_by_host_and_name(mount_host, mount_share, shares)
             if share is not None:
                 return share
     return None
@@ -74,7 +74,7 @@ def ensure_mounted(share_info: Share, *, timeout: float = 30) -> Path | None:
     with the same name on different servers collide, and the second mounted
     gets suffixed (``/Volumes/<share>-1``).
     """
-    host, share_name = share_info.get_host_and_share_name()
+    host, share_name = share_info.host, share_info.share_name
     smb_url = share_info.mac_path
 
     existing = find_live_mount(host, share_name)

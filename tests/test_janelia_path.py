@@ -12,7 +12,7 @@ from urllib.error import URLError
 
 import pytest
 
-from janelia_pathlib import _fetch, _registry, from_janelia_uri, to_janelia_uri
+from janelia_pathlib import _fetch, _registry, _windows, from_janelia_uri, to_janelia_uri
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="macOS paths")
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux paths")
@@ -23,10 +23,7 @@ windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows paths
 
 
 def test_to_janelia_uri_from_linux_path():
-    assert (
-        to_janelia_uri("/labs/alpha/alphalab/data")
-        == "janelia://fileserver.example.org/alphalab/data"
-    )
+    assert to_janelia_uri("/labs/alpha/alphalab/data") == "janelia:/labs/alpha/alphalab/data"
 
 
 @mac_only
@@ -39,22 +36,40 @@ def test_to_janelia_uri_from_mac_path():
             returncode=0,
             stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
         )
-        assert (
-            to_janelia_uri("/Volumes/alphalab/data")
-            == "janelia://fileserver.example.org/alphalab/data"
-        )
+        assert to_janelia_uri("/Volumes/alphalab/data") == "janelia:/labs/alpha/alphalab/data"
 
 
-@windows_only
 def test_to_janelia_uri_from_windows_path():
+    """A UNC path carries its own host, so it resolves without live state --
+    including when running on a non-Windows machine."""
     assert (
         to_janelia_uri("\\\\fileserver.example.org\\alphalab\\data")
-        == "janelia://fileserver.example.org/alphalab/data"
+        == "janelia:/labs/alpha/alphalab/data"
     )
 
 
 def test_to_janelia_uri_share_root_only():
-    assert to_janelia_uri("/labs/alpha/alphalab") == "janelia://fileserver.example.org/alphalab"
+    assert to_janelia_uri("/labs/alpha/alphalab") == "janelia:/labs/alpha/alphalab"
+
+
+def test_to_janelia_uri_from_smb_url_on_any_os():
+    """Same for an smb:// URL -- host and share name are both in the string."""
+    assert (
+        to_janelia_uri("smb://fileserver.example.org/alphalab/data")
+        == "janelia:/labs/alpha/alphalab/data"
+    )
+
+
+def test_to_janelia_uri_smb_url_share_root_only():
+    assert to_janelia_uri("smb://fileserver.example.org/alphalab") == "janelia:/labs/alpha/alphalab"
+
+
+def test_to_janelia_uri_smb_url_with_dollar_share():
+    """Hidden shares (trailing $) are ordinary share names, not special syntax."""
+    assert (
+        to_janelia_uri("smb://fileserver.example.org/alpha$/data")
+        == "janelia:/labs/alpha/home/data"
+    )
 
 
 def test_to_janelia_uri_no_match_passthrough():
@@ -63,22 +78,18 @@ def test_to_janelia_uri_no_match_passthrough():
 
 def test_to_janelia_uri_longest_prefix_wins():
     """Both /labs/charlie and /labs/charlie/charlie match; the longer wins."""
-    assert (
-        to_janelia_uri("/labs/charlie/charlie/data")
-        == "janelia://fileserver.example.org/charlie/data"
-    )
+    assert to_janelia_uri("/labs/charlie/charlie/data") == "janelia:/labs/charlie/charlie/data"
 
 
 def test_to_janelia_uri_trailing_slash():
-    assert to_janelia_uri("/labs/alpha/alphalab/") == "janelia://fileserver.example.org/alphalab"
+    assert to_janelia_uri("/labs/alpha/alphalab/") == "janelia:/labs/alpha/alphalab"
 
 
-@windows_only
 def test_to_janelia_uri_windows_forward_slash():
     """Windows paths with forward slashes should still match."""
     assert (
         to_janelia_uri("//fileserver.example.org/alphalab/data")
-        == "janelia://fileserver.example.org/alphalab/data"
+        == "janelia:/labs/alpha/alphalab/data"
     )
 
 
@@ -95,11 +106,8 @@ def test_to_janelia_uri_resolves_colliding_mac_mount_via_live_state():
         mock_run.return_value = subprocess.CompletedProcess(
             args=["mount"], returncode=0, stdout=mount_output
         )
-        assert to_janelia_uri("/Volumes/foxtrot/data") == "janelia://nrs.example.org/foxtrot/data"
-        assert (
-            to_janelia_uri("/Volumes/foxtrot-1/data")
-            == "janelia://nearline.example.org/foxtrot/data"
-        )
+        assert to_janelia_uri("/Volumes/foxtrot/data") == "janelia:/nrs/foxtrot/data"
+        assert to_janelia_uri("/Volumes/foxtrot-1/data") == "janelia:/nearline/foxtrot/data"
 
 
 @mac_only
@@ -122,15 +130,20 @@ def test_from_janelia_uri_no_match_passthrough():
 
 @linux_only
 def test_from_janelia_uri_on_linux():
-    assert (
-        from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
-        == "/labs/alpha/alphalab/data"
-    )
+    assert from_janelia_uri("janelia:/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
 
 
 def test_from_janelia_uri_unknown_share_raises():
     with pytest.raises(RuntimeError, match="No known share"):
-        from_janelia_uri("janelia://unknown.example.org/nope/data")
+        from_janelia_uri("janelia:/nope/not-a-share/data")
+
+
+def test_from_janelia_uri_rejects_double_slash_form():
+    """``janelia://host/share/...`` is the old form. ``//`` opens a URI
+    authority component, which a Linux path has no value for, so it's
+    rejected rather than silently parsing ``labs`` as an authority."""
+    with pytest.raises(RuntimeError, match="No known share"):
+        from_janelia_uri("janelia://labs/alpha/alphalab/data")
 
 
 @mac_only
@@ -145,7 +158,7 @@ def test_from_janelia_uri_mounts_on_demand():
             stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
         )
         mock_run.side_effect = [mount_output_empty, None, mount_output_found]
-        result = from_janelia_uri("janelia://fileserver.example.org/alphalab/data", timeout=2)
+        result = from_janelia_uri("janelia:/labs/alpha/alphalab/data", timeout=2)
         assert result == "/Volumes/alphalab/data"
         open_call = mock_run.call_args_list[1]
         args = open_call[0][0]
@@ -162,7 +175,7 @@ def test_from_janelia_uri_already_mounted():
             returncode=0,
             stdout="//user@fileserver.example.org/alphalab on /Volumes/alphalab (smbfs, nodev)",
         )
-        result = from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
+        result = from_janelia_uri("janelia:/labs/alpha/alphalab/data")
         assert result == "/Volumes/alphalab/data"
         for call in mock_run.call_args_list:
             assert call[0][0][0] != "open"
@@ -182,20 +195,119 @@ def test_from_janelia_uri_resolves_colliding_share_name():
                 "//user@nearline.example.org/foxtrot on /Volumes/foxtrot-1 (smbfs, nodev)"
             ),
         )
-        assert from_janelia_uri("janelia://nrs.example.org/foxtrot/data") == "/Volumes/foxtrot/data"
-        assert (
-            from_janelia_uri("janelia://nearline.example.org/foxtrot/data")
-            == "/Volumes/foxtrot-1/data"
-        )
+        assert from_janelia_uri("janelia:/nrs/foxtrot/data") == "/Volumes/foxtrot/data"
+        assert from_janelia_uri("janelia:/nearline/foxtrot/data") == "/Volumes/foxtrot-1/data"
 
 
-@linux_only
-def test_from_janelia_uri_raises_on_linux_mount_failure():
-    """Linux never mounts (fixed mount points), so this shouldn't try to."""
+@windows_only
+def test_from_janelia_uri_on_windows():
+    """Windows resolves to the UNC path -- no mounting step needed."""
     assert (
-        from_janelia_uri("janelia://fileserver.example.org/alphalab/data")
-        == "/labs/alpha/alphalab/data"
+        from_janelia_uri("janelia:/labs/alpha/alphalab/data")
+        == "\\\\fileserver.example.org\\alphalab\\data"
     )
+
+
+@windows_only
+def test_from_janelia_uri_windows_share_root_only():
+    assert (
+        from_janelia_uri("janelia:/labs/alpha/alphalab") == "\\\\fileserver.example.org\\alphalab"
+    )
+
+
+@windows_only
+def test_from_janelia_uri_windows_nested_subpath_separators():
+    """The subpath arrives forward-slashed from the matchers; every segment
+    must come back backslash-separated, not just the first join."""
+    assert (
+        from_janelia_uri("janelia:/labs/alpha/alphalab/sub/deeper/data")
+        == "\\\\fileserver.example.org\\alphalab\\sub\\deeper\\data"
+    )
+
+
+# --- Windows drive-letter mapping ---
+#
+# These patch PowerShell's Get-SmbMapping output rather than requiring a real
+# mapped drive, so they run on any platform -- same approach as the macOS
+# `mount` tests above.
+
+
+def _smb_mapping(stdout):
+    return subprocess.CompletedProcess(args=["powershell"], returncode=0, stdout=stdout)
+
+
+def test_find_share_for_windows_drive_matches_mapping():
+    mapping = json.dumps(
+        [{"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:"}]
+    )
+    with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
+        share = _windows.find_share_for_windows_drive("Z:", _registry._load_shares())
+        assert share is not None
+        assert share.linux_path == "/labs/alpha/alphalab"
+
+
+def test_find_share_for_windows_drive_is_case_insensitive():
+    """Drive letters are case-insensitive, and Get-SmbMapping may report a
+    trailing backslash that the queried drive string lacks."""
+    mapping = json.dumps(
+        [{"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:\\"}]
+    )
+    with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
+        share = _windows.find_share_for_windows_drive("z:", _registry._load_shares())
+        assert share is not None
+        assert share.linux_path == "/labs/alpha/alphalab"
+
+
+def test_find_share_for_windows_drive_resolves_colliding_share_names():
+    """Two shares named `foxtrot` on different hosts are mapped to different
+    letters; only the host in RemotePath tells them apart."""
+    mapping = json.dumps(
+        [
+            {"RemotePath": "\\\\nrs.example.org\\foxtrot", "LocalPath": "X:"},
+            {"RemotePath": "\\\\nearline.example.org\\foxtrot", "LocalPath": "Y:"},
+        ]
+    )
+    with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
+        shares = _registry._load_shares()
+        assert _windows.find_share_for_windows_drive("X:", shares).linux_path == "/nrs/foxtrot"
+        assert _windows.find_share_for_windows_drive("Y:", shares).linux_path == "/nearline/foxtrot"
+
+
+def test_find_share_for_windows_drive_single_mapping_is_json_object():
+    """ConvertTo-Json emits a bare object, not a list, for a single mapping."""
+    mapping = json.dumps({"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:"})
+    with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
+        share = _windows.find_share_for_windows_drive("Z:", _registry._load_shares())
+        assert share is not None
+        assert share.linux_path == "/labs/alpha/alphalab"
+
+
+def test_find_share_for_windows_drive_unmapped_returns_none():
+    mapping = json.dumps(
+        [{"RemotePath": "\\\\fileserver.example.org\\alphalab", "LocalPath": "Z:"}]
+    )
+    with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
+        assert _windows.find_share_for_windows_drive("Q:", _registry._load_shares()) is None
+
+
+def test_find_share_for_windows_drive_unknown_share_returns_none():
+    """A drive mapped to a share we don't know about isn't ours to translate."""
+    mapping = json.dumps([{"RemotePath": "\\\\other.example.org\\nope", "LocalPath": "Z:"}])
+    with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(mapping)):
+        assert _windows.find_share_for_windows_drive("Z:", _registry._load_shares()) is None
+
+
+@pytest.mark.parametrize("stdout", ["", "   ", "not json at all"])
+def test_live_windows_drives_degrades_on_bad_output(stdout):
+    """Empty or unparsable PowerShell output yields no mappings, not a crash."""
+    with patch("janelia_pathlib._windows.subprocess.run", return_value=_smb_mapping(stdout)):
+        assert _windows._live_windows_drives() == []
+
+
+def test_live_windows_drives_degrades_when_powershell_missing():
+    """On a non-Windows machine there's no powershell at all -- OSError, not a crash."""
+    with patch("janelia_pathlib._windows.subprocess.run", side_effect=OSError):
+        assert _windows._live_windows_drives() == []
 
 
 # --- round trip ---
@@ -251,7 +363,7 @@ def test_no_fetch_degrades_when_cache_missing(monkeypatch, tmp_path):
     _registry._load_shares.cache_clear()
     try:
         with pytest.warns(UserWarning, match="No share data available"):
-            assert _registry._load_shares() == {}
+            assert _registry._load_shares() == ()
         # No known shares -> a real share path is left untranslated
         assert to_janelia_uri("/labs/alpha/alphalab/data") == "/labs/alpha/alphalab/data"
     finally:
@@ -273,7 +385,7 @@ def test_missing_cache_degrades_without_no_fetch(monkeypatch, tmp_path):
     _registry._load_shares.cache_clear()
     try:
         with pytest.warns(UserWarning, match="No share data available"):
-            assert _registry._load_shares() == {}
+            assert _registry._load_shares() == ()
     finally:
         _registry._load_shares.cache_clear()
 
@@ -332,6 +444,6 @@ def test_fetch_failure_falls_back_to_stale_cache(monkeypatch, tmp_path):
         with pytest.warns(UserWarning, match="stale"):
             shares = _registry._load_shares()
         assert len(shares) == 1
-        assert next(iter(shares.values())).zone == "Alpha"
+        assert shares[0].zone == "Alpha"
     finally:
         _registry._load_shares.cache_clear()

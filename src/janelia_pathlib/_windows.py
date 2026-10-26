@@ -12,7 +12,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable
 
     from ._registry import Share
 
@@ -56,14 +56,14 @@ def _live_windows_drives() -> list[tuple[str, str, str]]:
     return drives
 
 
-def find_share_for_windows_drive(
-    drive: str, shares: Mapping[tuple[str, str], Share]
-) -> Share | None:
+def find_share_for_windows_drive(drive: str, shares: Iterable[Share]) -> Share | None:
     """Find which of ``shares`` is actually mapped to Windows drive letter ``drive``."""
+    from ._registry import find_share_by_host_and_name
+
     drive_norm = drive.rstrip("\\").upper()
     for mount_host, mount_share, local in _live_windows_drives():
         if local.rstrip("\\").upper() == drive_norm:
-            share = shares.get((mount_host, mount_share))
+            share = find_share_by_host_and_name(mount_host, mount_share, shares)
             if share is not None:
                 return share
     return None
