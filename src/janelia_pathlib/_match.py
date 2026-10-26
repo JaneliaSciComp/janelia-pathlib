@@ -1,12 +1,3 @@
-"""Matching path strings against known shares.
-
-Which matcher applies depends on how self-describing the path format is.
-A Linux path, a UNC path, and an ``smb://`` URL each identify a share on
-their own, so they resolve anywhere. A ``/Volumes/<name>`` mountpoint or a
-Windows drive letter don't -- only the live mount table on that machine
-says which share they point at.
-"""
-
 from __future__ import annotations
 
 import re

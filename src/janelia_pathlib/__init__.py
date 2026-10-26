@@ -1,6 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
-from janelia_pathlib._path import from_janelia_uri, to_janelia_uri
+from janelia_pathlib._translate import from_janelia_uri, to_janelia_uri
 
 try:
     __version__ = version("janelia-pathlib")

@@ -1,5 +1,3 @@
-"""The Share type and the share data it's loaded from."""
-
 from __future__ import annotations
 
 import json
