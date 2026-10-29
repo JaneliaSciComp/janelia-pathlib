@@ -35,7 +35,7 @@
     "zone": "Charlie",
     "group": "charlie",
     "storage": "home",
-    "linux_path": "/labs/charlie",
+    "linux_path": "/labs/charlie/home",
     "windows_path": "\\\\fileserver.example.org\\charlie$",
     "mac_path": "smb://fileserver.example.org/charlie$"
   },
@@ -46,6 +46,22 @@
     "linux_path": "/labs/charlie/charlie",
     "windows_path": "\\\\fileserver.example.org\\charlie",
     "mac_path": "smb://fileserver.example.org/charlie"
+  },
+  {
+    "zone": "Golf",
+    "group": "golf",
+    "storage": "primary",
+    "linux_path": "/labs/golf",
+    "windows_path": "\\\\fileserver.example.org\\golf",
+    "mac_path": "smb://fileserver.example.org/golf"
+  },
+  {
+    "zone": "Golflab",
+    "group": "golflab",
+    "storage": "primary",
+    "linux_path": "/labs/golflab",
+    "windows_path": "\\\\fileserver.example.org\\golflab",
+    "mac_path": "smb://fileserver.example.org/golflab"
   },
   {
     "zone": "Delta",
